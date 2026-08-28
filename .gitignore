@@ -1,0 +1,69 @@
+# Local agent/workspace state
+/AGENTS.md
+.codex/
+.playwright-cli/
+/.worktrees/
+
+# ProjectAtlas runtime state
+.projectatlas/*.db
+.projectatlas/*.db-*
+.projectatlas/*.lock
+.projectatlas/graph-stage-*/
+.projectatlas/optional-parser-pack.json
+.projectatlas/projectatlas.toon
+.projectatlas/projectatlas-purpose-review.json
+.projectatlas/projectatlas.mcp.json
+.projectatlas/projectatlas.claude.mcp.json
+.projectatlas/projectatlas.opencode.json
+
+# Rust/Cargo
+target/
+
+# JavaScript/Node
+node_modules/
+dist/
+build/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python leftovers and local virtualenvs
+.venv/
+.tox/
+.nox/
+.coverage
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
+# Documentation/site build output
+site/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Logs and temporary output
+*.log
+*.tmp
+*.bak
+*.orig
+tmp/
+temp/
+
+# Editors and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

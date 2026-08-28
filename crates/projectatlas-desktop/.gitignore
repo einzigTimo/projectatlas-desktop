@@ -1,0 +1,5 @@
+# Von tauri-build bei jedem Bau neu erzeugt - nicht versionieren.
+gen/schemas/
+
+# Sidecar-Binaries werden vom Release-Skript erzeugt.
+binaries/

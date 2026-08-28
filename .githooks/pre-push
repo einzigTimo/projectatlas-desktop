@@ -1,0 +1,31 @@
+#!/bin/sh
+# Purpose: Run the full local ProjectAtlas check suite before pushing.
+
+set -e
+
+# Git exports repository-local state to hooks; test fixtures must rediscover their own roots.
+for git_variable in $(git rev-parse --local-env-vars); do
+  unset "$git_variable"
+done
+
+cargo run --locked -p projectatlas-lints --bin cargo-projectatlas-lints -- strict-strings
+python3 docs/benchmarks/harness/mcp_composition.py --self-test
+python3 .github/scripts/verify-manual-benchmark-policy.py
+python3 .github/scripts/verify-published-benchmark-locks.py
+cargo fmt --all --check
+cargo check --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo deny --locked --all-features check -D warnings
+cargo test --workspace --all-features --locked
+cargo test --doc --workspace --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+npm ci --ignore-scripts --prefix .github/mermaid-parser
+npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
+python3 .github/scripts/issue-checklists.py --self-test
+python3 .github/scripts/test-optional-parser-proof-inputs.py
+command -v gh >/dev/null 2>&1
+repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+python3 .github/scripts/issue-checklists.py \
+  --repo "$repo" --root . --issue-map openspec/issue-map.json
+cargo run --locked -p projectatlas-cli -- --format json scan .
+cargo run --locked -p projectatlas-cli -- lint --report-untracked --purpose-level low

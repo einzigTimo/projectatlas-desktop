@@ -1,0 +1,38 @@
+[package]
+name = "projectatlas-desktop"
+version = "0.2.3"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Windows desktop dashboard for ProjectAtlas token-savings telemetry."
+publish = false
+
+[[bin]]
+name = "projectatlas-desktop"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+projectatlas-core.workspace = true
+projectatlas-db.workspace = true
+projectatlas-service.workspace = true
+blake3.workspace = true
+ignore.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-shell = "2"
+tiktoken.workspace = true
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ProjectAtlas Desktop</title>
+  <link rel="stylesheet" href="css/app.css">
+  <!-- Absichtlich blockierend und vor dem Rumpf: das gemerkte Design steht damit
+       vor dem ersten Zeichnen fest und das Fenster blitzt nicht kurz dunkel auf. -->
+  <script src="js/theme.js"></script>
+</head>
+<body>
+
+<div class="shell">
+  <!-- ============ SEITENLEISTE: Projektumschalter ============ -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <span class="mark">&#9672;</span>
+      <span class="title">ProjectAtlas</span>
+    </div>
+    <div class="sidebar-actions">
+      <button class="icon-btn" id="btnAdd" type="button">+ Ordner</button>
+      <button class="icon-btn" id="btnRescan" type="button">&#10227; Scan</button>
+    </div>
+    <div class="project-list" id="projectList"></div>
+    <div class="sidebar-foot">
+      <span class="live-pip pulse" id="livePip"></span>
+      <span id="liveLabel">automatisch aktuell</span>
+      <span class="foot-btns">
+        <button class="foot-btn" id="btnTheme" type="button" title="Helles Design">&#9728;</button>
+        <button class="foot-btn" id="btnSetup" type="button" title="KI-Werkzeuge verbinden">&#128279;</button>
+        <button class="foot-btn" id="btnUpdate" type="button" title="Version und Aktualisierungen">&#9881;</button>
+      </span>
+    </div>
+  </aside>
+
+  <!-- ============ HAUPTBEREICH ============ -->
+  <main class="main">
+    <div class="titlebar">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="proj" id="projTitle">Kein Projekt gewählt</span>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" type="button" data-view="overview">Übersicht</button>
+      <button class="tab" type="button" data-view="trend">Zeitverlauf</button>
+      <button class="tab" type="button" data-view="activity">Aktivität</button>
+    </nav>
+
+    <div class="view">
+
+      <!-- ---- ÜBERSICHT: links Kennzahlen, rechts Atlas Map ---- -->
+      <section class="view-panel active" id="view-overview">
+        <div class="state-note" id="overviewNote" hidden></div>
+        <div class="overview-cols" id="overviewCols">
+
+          <div class="overview-main">
+            <div class="header-row">
+              <div class="brand">ProjectAtlas Desktop
+                <span class="sub">Token-Ersparnis-Übersicht</span>
+              </div>
+              <div class="kv">
+                <div><span class="k">Sitzung: </span><span class="v">alle</span></div>
+                <div><span class="k">Abfragen: </span><span class="v num" id="hdrCalls">–</span></div>
+                <div><span class="k">Schätzung: </span><span class="v" id="hdrEstimate">–</span></div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-body">
+                <div class="hero-title uc">Insgesamt gesparte Tokens</div>
+                <div class="hero-value num" id="heroValue"><span id="heroNumber">–</span><span class="check" id="heroCheck"></span></div>
+                <div class="hero-sub" id="heroSub">noch keine Daten</div>
+                <div class="hero-hint" id="heroHint" hidden></div>
+                <hr class="hero-divider">
+
+                <div class="equation">
+                  <div class="eq-col">
+                    <div class="n num" id="eqWithout" style="color:var(--blue)">–</div>
+                    <div class="l">Ohne ProjectAtlas</div>
+                    <div class="bar"><i id="eqWithoutBar" style="width:0;background:var(--blue)"></i></div>
+                  </div>
+                  <div class="eq-op">&minus;</div>
+                  <div class="eq-col">
+                    <div class="n num" id="eqWith" style="color:var(--ink)">–</div>
+                    <div class="l">Mit ProjectAtlas</div>
+                    <div class="bar"><i id="eqWithBar" style="width:0;background:var(--ink)"></i></div>
+                  </div>
+                  <div class="eq-op">=</div>
+                  <div class="eq-col">
+                    <div class="n num" id="eqSaved" style="color:var(--green)">–</div>
+                    <div class="l">Gespart</div>
+                    <div class="bar"><i id="eqSavedBar" style="width:0;background:var(--green)"></i></div>
+                  </div>
+                </div>
+                <div class="equation">
+                  <div class="eq-col">
+                    <div class="n num" id="eqMeasured" style="color:var(--green)">–</div>
+                    <div class="l">beobachtet gemessen</div>
+                    <div class="bar"><i id="eqMeasuredBar" style="width:0;background:var(--green)"></i></div>
+                  </div>
+                  <div class="eq-op">+</div>
+                  <div class="eq-col">
+                    <div class="n num" id="eqModeled" style="color:var(--purple)">–</div>
+                    <div class="l">modelliert vermieden</div>
+                    <div class="bar"><i id="eqModeledBar" style="width:0;background:var(--purple)"></i></div>
+                  </div>
+                  <div class="eq-op">&le;</div>
+                  <div class="eq-col">
+                    <div class="n num" id="eqMaximum" style="color:var(--yellow)">–</div>
+                    <div class="l">Maximum</div>
+                    <div class="bar"><i id="eqMaximumBar" style="width:0;background:var(--yellow)"></i></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-body">
+                <div class="nav-strip-label uc">Vermiedene Navigation</div>
+                <div class="nav-strip">
+                  <div class="item"><div class="n num" id="navReads">–</div><div class="l">Dateilesungen vermieden</div></div>
+                  <div class="item"><div class="n num" id="navObserved">–</div><div class="l">beobachtet</div></div>
+                  <div class="item"><div class="n num" id="navModeled">–</div><div class="l">modelliert</div></div>
+                  <div class="item"><div class="n num" id="navRate">–</div><div class="l">Sparquote</div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title"><span class="uc">Signal</span></div>
+              <div class="panel-body signal-cols">
+                <div>
+                  <div class="signal-title uc">Vertrauen</div>
+                  <div class="donut-row">
+                    <svg width="58" height="58" viewBox="0 0 58 58" aria-hidden="true">
+                      <circle cx="29" cy="29" r="24" fill="none" stroke="var(--bar-empty)" stroke-width="7"/>
+                      <circle id="signalDonut" cx="29" cy="29" r="24" fill="none" stroke="var(--green)" stroke-width="7"
+                        stroke-dasharray="150.8" stroke-dashoffset="150.8" stroke-linecap="round" transform="rotate(-90 29 29)"/>
+                    </svg>
+                    <div class="signal-legend">
+                      <div><i style="background:var(--green)"></i><span id="signalObserved">beobachtet –</span></div>
+                      <div><i style="background:var(--bar-empty)"></i><span id="signalModeled">modelliert –</span></div>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div class="signal-title uc">Kategorien</div>
+                  <div class="signal-legend" id="signalCategories"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title"><span class="uc">Woher die Ersparnis kommt</span></div>
+              <div class="panel-body" style="padding-top:8px;">
+                <table class="breakdown">
+                  <thead><tr><th>Anbieter / Modell</th><th>Baseline</th><th class="num">Aufrufe</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+                  <tbody id="breakdownBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title">
+                <span class="uc">Kalibrierung &amp; Hinweise</span>
+                <span class="calib-actions">
+                  <select id="calibTokenizer" title="Lokaler Tokenizer für die Nachmessung">
+                    <option value="o200k_base">o200k_base</option>
+                    <option value="cl100k_base">cl100k_base</option>
+                  </select>
+                  <button class="icon-btn" id="calibBtn" type="button">Echt nachmessen</button>
+                </span>
+              </div>
+              <div class="panel-body calib-lines" id="calibLines"></div>
+            </div>
+
+            <div class="status-bar">
+              <span class="app" id="appVersion">ProjectAtlas Desktop</span>
+              <span id="statusClock">noch nicht aktualisiert</span>
+            </div>
+          </div>
+
+          <!-- ---- ATLAS MAP ---- -->
+          <div class="panel atlas-panel">
+            <div class="panel-title">
+              <span class="uc">Atlas Map</span>
+              <span class="atlas-actions">
+                <button class="map-btn" id="atlasZoomOut" type="button" title="Verkleinern">&minus;</button>
+                <button class="map-btn" id="atlasZoomIn" type="button" title="Vergrößern">+</button>
+                <button class="map-btn" id="atlasReset" type="button" title="Ansicht zurücksetzen">&#10227;</button>
+                <button class="map-btn" id="atlasExpand" type="button" title="Große Ansicht">&#9974;</button>
+              </span>
+            </div>
+            <div class="atlas-canvas-wrap" id="atlasWrap">
+              <div class="atlas-placeholder">Beziehungsgraph wird geladen …</div>
+            </div>
+            <div class="atlas-detail" id="atlasDetail" hidden></div>
+            <div class="atlas-foot" id="atlasFoot"></div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ---- ZEITVERLAUF ---- -->
+      <section class="view-panel" id="view-trend">
+        <div class="trend-head">
+          <div class="panel-title" style="border:none; padding:0;"><span class="uc">Gesparte Tokens &middot; Zeitverlauf</span></div>
+          <div class="window-switch" id="windowSwitch">
+            <button type="button" data-window="day" class="active">Tag</button>
+            <button type="button" data-window="week">Woche</button>
+            <button type="button" data-window="month">Monat</button>
+            <button type="button" data-window="year">Jahr</button>
+          </div>
+        </div>
+        <div class="state-note" id="trendNote" hidden></div>
+        <div class="panel">
+          <div class="panel-body">
+            <svg id="trendSvg" width="100%" height="180" viewBox="0 0 700 180" preserveAspectRatio="none" aria-hidden="true"></svg>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:10px;">
+          <div class="panel-body" style="padding-top:8px;">
+            <table class="breakdown">
+              <thead><tr><th>Periode</th><th class="num">Aufrufe</th><th class="num">Ohne</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+              <tbody id="trendBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---- AKTIVITÄT ---- -->
+      <section class="view-panel" id="view-activity">
+        <div class="activity-note">Roh-Log der zuletzt aufgezeichneten Aufrufe. Der Zeitverlauf reicht weiter zurück, weil er auf Tages-Summen beruht.</div>
+        <div class="state-note" id="activityNote" hidden></div>
+        <div id="activityList"></div>
+      </section>
+
+    </div>
+  </main>
+  <!-- ============ ATLAS MAP: GROSSE ANSICHT ============ -->
+  <div class="overlay" id="atlasOverlay" hidden>
+    <div class="overlay-card atlas-card">
+      <div class="overlay-head">
+        <span class="uc">Atlas Map</span>
+        <span class="atlas-actions">
+          <button class="map-btn" id="atlasBigZoomOut" type="button" title="Verkleinern">&minus;</button>
+          <button class="map-btn" id="atlasBigZoomIn" type="button" title="Vergrößern">+</button>
+          <button class="map-btn" id="atlasBigReset" type="button" title="Ansicht zurücksetzen">&#10227;</button>
+        </span>
+        <button class="overlay-close" id="atlasCloseBtn" type="button" title="Schließen">&times;</button>
+      </div>
+      <div class="atlas-canvas-wrap" id="atlasBigWrap"></div>
+      <div class="atlas-detail" id="atlasBigDetail" hidden></div>
+      <div class="atlas-foot" id="atlasBigFoot"></div>
+    </div>
+  </div>
+
+  <!-- ============ EINRICHTUNG: KI-WERKZEUGE ============ -->
+  <div class="overlay" id="setupOverlay" hidden>
+    <div class="overlay-card">
+      <div class="overlay-head">
+        <span class="uc">KI-Werkzeuge verbinden</span>
+        <button class="overlay-close" id="setupCloseBtn" type="button" title="Schließen">&times;</button>
+      </div>
+      <div class="overlay-body">
+        <div class="setup-intro">
+          Erkannt wird nur, ob der Konfigurationsordner eines Werkzeugs vorhanden ist &ndash;
+          gelesen oder verändert wird darin nichts.
+        </div>
+        <div class="setup-tools" id="setupTools"></div>
+
+        <div class="setup-project-head uc">Gewähltes Projekt</div>
+        <div class="setup-project" id="setupProject">kein Projekt gewählt</div>
+        <div class="setup-files" id="setupFiles"></div>
+        <div class="setup-progress" id="setupProgress"></div>
+        <div class="setup-activity" id="setupActivity" hidden>
+          <div class="setup-activity-track"><div class="setup-activity-bar"></div></div>
+          <span class="setup-activity-time num" id="setupActivityTime">0 s</span>
+        </div>
+        <div class="overlay-state" id="setupState"></div>
+      </div>
+      <div class="overlay-foot setup-foot">
+        <label class="setup-scan" title="Ohne Scan bleibt der Beziehungsgraph leer und der Punkt in der Seitenleiste gelb.">
+          <input type="checkbox" id="setupScan" checked>
+          <span>Index neu aufbauen (Scan)</span>
+        </label>
+        <div class="setup-foot-buttons">
+          <button class="icon-btn" id="setupConnectBtn" type="button" disabled>Nur dieses Projekt</button>
+          <button class="icon-btn primary" id="setupConnectAllBtn" type="button">Alle verbinden</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ UPDATE-BEREICH ============ -->
+  <div class="overlay" id="updateOverlay" hidden>
+    <div class="overlay-card">
+      <div class="overlay-head">
+        <span class="uc">Version &amp; Aktualisierung</span>
+        <button class="overlay-close" id="updateCloseBtn" type="button" title="Schließen">&times;</button>
+      </div>
+      <div class="overlay-body">
+        <div class="overlay-version" id="updateCurrentVersion">Version –</div>
+        <div class="overlay-state" id="updateState">noch nicht geprüft</div>
+        <pre class="overlay-notes selectable" id="updateNotes" hidden></pre>
+        <div class="overlay-progress" id="updateProgress" hidden>
+          <div class="overlay-progress-bar" id="updateProgressBar"></div>
+        </div>
+      </div>
+      <div class="overlay-foot">
+        <button class="icon-btn" id="updateCheckBtn" type="button">Nach Updates suchen</button>
+        <button class="icon-btn primary" id="updateInstallBtn" type="button" disabled>Jetzt installieren &amp; neu starten</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/format.js" defer></script>
+<script src="js/api.js" defer></script>
+<script src="js/projects.js" defer></script>
+<script src="js/overview.js" defer></script>
+<script src="js/trend.js" defer></script>
+<script src="js/activity.js" defer></script>
+<script src="js/atlas.js" defer></script>
+<script src="js/live-update.js" defer></script>
+<script src="js/update.js" defer></script>
+<script src="js/setup.js" defer></script>
+<script src="js/main.js" defer></script>
+</body>
+</html>

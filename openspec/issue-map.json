@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "changes": {
+    "accept-compiler-config-utf8-bom": 408,
+    "admit-purpose-mutations-through-freshness": 463,
+    "add-agent-session-brief": 292,
+    "add-mcp-task-progress-model": 295,
+    "add-nearest-project-routing": 276,
+    "advance-rust-repository-intelligence": 308,
+    "await-observable-watch-readiness": 422,
+    "bound-impact-analysis-deadlines": 380,
+    "bound-qualified-symbol-parents": 473,
+    "centralize-cargo-dependency-management": 316,
+    "close-mcp-cli-parity": 281,
+    "close-v043-release-regressions": {
+      "contract": "checklist-v1",
+      "primary_issue": 428,
+      "owners": [
+        {
+          "issue": 428,
+          "first_task": "1.1",
+          "last_task": "1.4"
+        },
+        {
+          "issue": 432,
+          "first_task": "2.1",
+          "last_task": "2.4"
+        },
+        {
+          "issue": 433,
+          "first_task": "3.1",
+          "last_task": "3.4"
+        },
+        {
+          "issue": 435,
+          "first_task": "4.1",
+          "last_task": "4.3"
+        }
+      ]
+    },
+    "complete-v040-release-readiness": 311,
+    "consolidate-projectatlas-landing-page": 381,
+    "converge-claude-code-installer": 278,
+    "converge-opencode-installer": 279,
+    "connect-classified-documentation-graph": 440,
+    "delegate-bulk-purpose-curation": 301,
+    "drain-mcp-test-responses-before-eof": 416,
+    "enforce-rust-test-quality-gates": 309,
+    "expose-concrete-codex-tool-schemas": 386,
+    "expose-mcp-capabilities-settings": 293,
+    "gate-codex-pr-review-threads": 299,
+    "handoff-obsolete-mcp-runtime": 411,
+    "harden-parser-runtime-and-graph-invalidation": 356,
+    "harden-project-path-types": 294,
+    "enhance-projectatlas-init-first-run": 305,
+    "fix-token-tui-reference-visual-regression": 304,
+    "isolate-effective-git-config-stdin": 409,
+    "isolate-linked-worktree-atlases": 382,
+    "manage-worktree-atlas-continuity": 430,
+    "match-token-impact-reference-tui": 302,
+    "migrate-released-database-layouts": 379,
+    "pin-sql-fixture-line-endings": 401,
+    "persist-agent-project-context": {
+      "contract": "checklist-v1",
+      "primary_issue": 314,
+      "owners": [
+        {
+          "issue": 314,
+          "first_task": "1.1",
+          "last_task": "7.5"
+        }
+      ]
+    },
+    "persist-graph-coverage-limits": 471,
+    "prefer-worktree-guidance-before-database-preflight": 412,
+    "preserve-indexing-across-invalid-symbol-identities": 467,
+    "publish-rustdoc-readme-links": 300,
+    "recognize-btrfs-subvolume-database-placement": 469,
+    "reject-incompatible-schema-before-write": 410,
+    "release-candidates-and-pr-cleanup": 448,
+    "report-installer-host-restart": 383,
+    "resolve-configured-module-aliases": 385,
+    "restore-document-file-traversal": 461,
+    "bound-token-dashboard-to-viewport": 462,
+    "reuse-release-proof-by-inputs": 366,
+    "reuse-unchanged-ci-build-layers": 341,
+    "show-agent-efficiency-dashboard": 340,
+    "serialize-lint-reports": 472,
+    "simplify-token-tui-dashboard": 296,
+    "stabilize-hostile-parser-fixture-admission": 397,
+    "stabilize-parser-recovery-harness": 391
+  }
+}

@@ -1,0 +1,90 @@
+name: 03-Auto-Release
+
+# /**
+#  * Purpose: Create a GitHub release when a new version lands on main.
+#  */
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  release:
+    name: auto-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(awk -F'"' '
+            /^\[workspace.package\]/ { in_workspace_package = 1; next }
+            /^\[/ { if (in_workspace_package) exit }
+            in_workspace_package && /^version = / { print $2; exit }
+          ' Cargo.toml)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read workspace package version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Classify release version
+        id: release
+        run: |
+          python3 .github/scripts/release_version.py --self-test
+          python3 .github/scripts/release_version.py \
+            "${{ steps.version.outputs.version }}" \
+            --source workspace \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Fetch tags
+        run: git fetch --tags
+
+      - name: Check tag
+        id: tag
+        if: steps.release.outputs.eligible == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if git tag -l "$RELEASE_TAG" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve clean optional-parser handoff
+        id: parser_pack
+        if: steps.release.outputs.eligible == 'true' && steps.tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          promotion_sha="$(git rev-parse 'HEAD^{commit}')"
+          if [[ "$promotion_sha" != "$GITHUB_SHA" ]]; then
+            echo "Auto-release checkout differs from the exact main push" >&2
+            exit 1
+          fi
+          parser_pack_run_id="$(
+            python3 .github/scripts/resolve-optional-parser-handoff.py \
+              --repository "$GITHUB_REPOSITORY" \
+              --promotion-sha "$promotion_sha"
+          )"
+          echo "run_id=$parser_pack_run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release workflow
+        if: steps.release.outputs.eligible == 'true' && steps.tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml \
+            --ref main \
+            --field version="${{ steps.release.outputs.tag }}" \
+            --field parser_pack_run_id="${{ steps.parser_pack.outputs.run_id }}"

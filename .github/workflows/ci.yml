@@ -1,0 +1,403 @@
+# Purpose: Verify ProjectAtlas Rust quality gates and multi-OS behavior tests.
+
+name: 01-CI
+
+# /**
+#  * Purpose: Run Rust source, test, and build checks.
+#  */
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+env:
+  RUSTUP_TOOLCHAIN: "1.93.1"
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUSTUP_TOOLCHAIN"
+
+      - name: Repository source policy lints
+        timeout-minutes: 2
+        run: cargo run --locked -p projectatlas-lints --bin cargo-projectatlas-lints -- strict-strings
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Issue reference check
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          PR_TITLE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.title // ""')"
+          PR_BODY="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')"
+          PR_MILESTONE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
+          text="$PR_TITLE $PR_BODY"
+          if ! [[ "$text" =~ (#[0-9]+|GH-[0-9]+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) ]]; then
+            echo "Pull request title or body must reference a GitHub issue." >&2
+            exit 1
+          fi
+          if [[ -z "$PR_MILESTONE" ]]; then
+            echo "Pull request must be assigned to a milestone." >&2
+            exit 1
+          fi
+
+      - name: Issue checklist check
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm ci --ignore-scripts --prefix .github/mermaid-parser
+          npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
+          python3 .github/scripts/issue-checklists.py --self-test
+          python3 .github/scripts/test-optional-parser-proof-inputs.py
+          python3 .github/scripts/issue-checklists.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --root . \
+            --issue-map openspec/issue-map.json
+
+      - name: Manual-only full benchmark policy
+        run: python3 .github/scripts/verify-manual-benchmark-policy.py
+
+      - name: Published benchmark measurement locks
+        run: python3 .github/scripts/verify-published-benchmark-locks.py
+
+      - name: Codex PR review thread gate
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 .github/scripts/codex-pr-review-gate.py --self-test
+          python3 .github/scripts/codex-pr-review-gate.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER"
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Check
+        run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Dependency policy
+        run: cargo deny --locked --all-features check -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --all-features --locked
+
+      - name: Filtered custom harness compatibility
+        run: cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled
+
+      - name: Doc tests
+        run: cargo test --doc --workspace --all-features --locked
+
+      - name: Rustdoc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+
+  e2e-smoke:
+    name: e2e-smoke ${{ matrix.label }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+          - label: windows
+            os: windows-latest
+          - label: macos-x64
+            os: macos-15-intel
+          - label: macos-arm64
+            os: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup default "$RUSTUP_TOOLCHAIN"
+
+      - name: Holistic classified worktree agent E2E
+        timeout-minutes: 10
+        run: cargo test --locked -p projectatlas-cli --test e2e holistic_agent_worktree_flow_keeps_local_atlases_isolated_across_cli_watch_and_mcp -- --exact --include-ignored --nocapture
+
+      - name: Graph, symbol, purpose, and viewport regressions
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          cargo test --locked -p projectatlas-cli --test e2e csharp_symbol_identity_boundary_preserves_full_and_incremental_publication -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e deep_qualified_symbol_parents_preserve_full_and_incremental_publication -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e partial_markdown_limit_persists_without_losing_complete_publication -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e lint_formats_share_typed_cli_and_mcp_report -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e classified_document_navigation_agrees_across_cli_and_mcp -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e conditional_purpose_review_cli_reconciles_source_before_apply -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e persistent_mcp_purpose_review_reconciles_source_before_apply -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli --test e2e token_tui_cli_respects_selected_terminal_viewport -- --exact --include-ignored --nocapture
+          cargo test --locked -p projectatlas-cli token_tui::tests -- --nocapture
+
+      - name: Capture hosted PTY token dashboards
+        if: matrix.label != 'windows'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/.tmp/tui-hosted-${{ matrix.label }}"
+          repo="$evidence/repo"
+          binary="$GITHUB_WORKSPACE/target/debug/projectatlas"
+          mkdir -p "$repo/src"
+          git init -q "$repo"
+          git -C "$repo" config user.email "ci@projectatlas.invalid"
+          git -C "$repo" config user.name "ProjectAtlas CI"
+          printf 'pub fn hosted_terminal_contract() {}\n' > "$repo/src/lib.rs"
+          git -C "$repo" add src/lib.rs
+          git -C "$repo" commit -qm "test: seed hosted terminal evidence"
+          cargo build --locked -p projectatlas-cli
+          (cd "$repo" && "$binary" --format json init --no-scan)
+          (cd "$repo" && "$binary" --format json scan)
+          export PROJECTATLAS_TUI_BINARY="$binary"
+          export PROJECTATLAS_TUI_DB="$repo/.projectatlas/projectatlas.db"
+          render='stty rows "$PROJECTATLAS_TUI_ROWS" cols "$PROJECTATLAS_TUI_COLUMNS"; export COLUMNS="$PROJECTATLAS_TUI_COLUMNS" LINES="$PROJECTATLAS_TUI_ROWS"; case "$PROJECTATLAS_TUI_CASE" in compact-overview) "$PROJECTATLAS_TUI_BINARY" --db "$PROJECTATLAS_TUI_DB" token --session "界" --view tui ;; full-overview) "$PROJECTATLAS_TUI_BINARY" --db "$PROJECTATLAS_TUI_DB" token --view tui --theme light ;; compact-trend|full-trend) "$PROJECTATLAS_TUI_BINARY" --db "$PROJECTATLAS_TUI_DB" token --view tui --trend month ;; *) exit 64 ;; esac'
+          capture() {
+            local name="$1" rows="$2" columns="$3" case_name="$4"
+            local output="$evidence/$name.ansi"
+            export PROJECTATLAS_TUI_ROWS="$rows"
+            export PROJECTATLAS_TUI_COLUMNS="$columns"
+            export PROJECTATLAS_TUI_CASE="$case_name"
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              script -q "$output" sh -c "$render"
+            else
+              script -q -e -c "$render" "$output"
+            fi
+            test -s "$output"
+            grep -a -q "Token" "$output"
+          }
+          capture compact-overview-40x8 8 40 compact-overview
+          capture full-overview-80x50 50 80 full-overview
+          capture compact-trend-79x29 29 79 compact-trend
+          capture full-trend-80x30 30 80 full-trend
+          printf '%s\n' \
+            'compact-overview-40x8.ansi: 40 columns x 8 rows, CJK session' \
+            'full-overview-80x50.ansi: 80 columns x 50 rows, light theme' \
+            'compact-trend-79x29.ansi: 79 columns x 29 rows' \
+            'full-trend-80x30.ansi: 80 columns x 30 rows' \
+            > "$evidence/manifest.txt"
+
+      - name: Upload hosted PTY token dashboards
+        if: matrix.label != 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: token-tui-pty-${{ matrix.label }}
+          path: |
+            .tmp/tui-hosted-${{ matrix.label }}/*.ansi
+            .tmp/tui-hosted-${{ matrix.label }}/manifest.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Native Btrfs database placement contract
+        if: matrix.label == 'linux'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes btrfs-progs
+          image="$RUNNER_TEMP/projectatlas-btrfs.img"
+          mount_root="$RUNNER_TEMP/projectatlas-btrfs"
+          subvolume="$mount_root/projectatlas-subvolume"
+          mkdir -p "$mount_root"
+          truncate -s 256M "$image"
+          sudo mkfs.btrfs -f "$image"
+          cleanup() {
+            if mountpoint -q "$mount_root"; then
+              sudo umount "$mount_root"
+            fi
+          }
+          trap cleanup EXIT
+          sudo mount -o loop "$image" "$mount_root"
+          sudo btrfs subvolume create "$subvolume"
+          sudo chown "$(id -u):$(id -g)" "$subvolume"
+          cargo build --locked -p projectatlas-cli
+          PROJECTATLAS_BTRFS_TEST_ROOT="$subvolume" \
+          PROJECTATLAS_MCP_CONTRACT_EXECUTABLE="$GITHUB_WORKSPACE/target/debug/projectatlas" \
+            cargo test --locked -p projectatlas-cli --test e2e linux_btrfs_subvolume_database_supports_cli_and_persistent_mcp_reopen -- --exact --include-ignored --nocapture
+
+      - name: Worktree lifecycle race regressions
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          cargo test --locked -p projectatlas-db active_registration_guard -- --nocapture
+          cargo test --locked -p projectatlas-cli registered_init_rejects_replaced_git_lifecycle_before_or_during_activation_and_binding -- --nocapture
+          cargo test --locked -p projectatlas-cli final_retirement_does_not_import_replacement_lifecycle_telemetry -- --nocapture
+          cargo test --locked -p projectatlas-cli retirement_reclassifies_identity_and_snapshot_failures_after_lifecycle_replacement -- --nocapture
+          cargo test --locked -p projectatlas-cli registered_reset_and_binding_linearize_without_recreating_a_reset_winner -- --nocapture
+
+      - name: Plugin installer E2E
+        timeout-minutes: 10
+        run: cargo test --locked -p projectatlas-cli plugin_installer_writes_real_harness_configs --test e2e
+
+      - name: Installer RC pin E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli installer_workflow_pin_reports_preserve_exact_rc_identity --test e2e
+
+      - name: Plugin update E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_replaces_stale_runtime_configs_and_launches_new_mcp --test e2e
+
+      - name: Plugin update non-official marketplace E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_skips_non_official_codex_marketplace --test e2e
+
+      - name: Plugin update already-current marketplace E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_leaves_current_codex_marketplace_untouched --test e2e
+
+      - name: Plugin update stale source manifest E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_repairs_current_codex_plugin_with_stale_source_manifest --test e2e
+
+      - name: Plugin update restore-on-failure E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_restores_current_ref_marketplace_when_plugin_reinstall_fails --test e2e
+
+      - name: Plugin update total-offline preservation E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_preserves_prior_integration_when_all_replacement_adds_fail --test e2e
+
+      - name: Plugin update strict inventory E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_refuses_unavailable_or_ambiguous_inventory --test e2e
+
+      - name: POSIX plugin inventory no-jq E2E
+        if: matrix.label != 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli posix_plugin_inventory_without_jq_rejects_split_object_fields --test e2e -- --exact
+
+      - name: Plugin update concurrent rollback serialization E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_serializes_restore_before_the_next_installer_reads_state --test e2e
+
+      - name: Windows plugin lock canonicalization failure E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli windows_plugin_update_fails_closed_when_lock_root_cannot_be_canonicalized --test e2e -- --exact
+
+      - name: Plugin update retained recovery refusal E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli plugin_update_refuses_retained_recovery_state_before_mutation --test e2e
+
+      - name: POSIX plugin restore trust-boundary E2E
+        if: matrix.label != 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli posix_plugin_restore_rejects_hostile_paths_and_retains_recovery_state --test e2e -- --exact
+
+      - name: POSIX plugin lock crash and trust-boundary E2E
+        if: matrix.label != 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli posix_plugin_lock_rejects_indirection_and_survives_crash --test e2e -- --exact
+
+      - name: Windows plugin snapshot trust-boundary E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          cargo test --locked -p projectatlas-cli windows_plugin_restore_rejects_cache_junction_and_retains_recovery_snapshot --test e2e -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p projectatlas-cli windows_plugin_snapshot_rejects_reparse_above_codex_home_before_mutation --test e2e -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p projectatlas-cli windows_plugin_snapshot_cleanup_refuses_path_swap_without_outside_deletion --test e2e -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p projectatlas-cli windows_plugin_snapshot_cleanup_failure_retains_usable_direct_snapshot --test e2e -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p projectatlas-cli windows_plugin_restore_rejects_config_directory_and_retains_recovery_snapshot --test e2e -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Windows recovery config selection E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli windows_installer_recovery_operation_preserves_config_selection --test e2e -- --exact
+
+      - name: Windows locked runtime update E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        env:
+          PROJECTATLAS_TEST_DISPOSABLE_RUNNER: ${{ runner.environment }}
+        run: cargo test --locked -p projectatlas-cli windows_release_binary_installer_uses_versioned_runtime_when_stable_mirror_is_locked --test e2e -- --exact
+
+      - name: Windows persisted User PATH E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        env:
+          PROJECTATLAS_TEST_DISPOSABLE_RUNNER: ${{ runner.environment }}
+          PROJECTATLAS_TEST_PERSIST_USER_PATH: "1"
+        run: cargo test --locked -p projectatlas-cli windows_installer_fresh_path_probe_respects_machine_precedence --test e2e -- --exact
+
+      - name: Windows stale MCP registry update E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli windows_release_binary_installer_repairs_stale_mirror_without_registering_it --test e2e
+
+      - name: Windows installer trust boundaries
+        if: matrix.label == 'windows'
+        timeout-minutes: 10
+        run: cargo test --locked -p projectatlas-cli --all-features --test installer_trust_boundaries
+
+      - name: Windows obsolete MCP handoff E2E
+        if: matrix.label == 'windows'
+        timeout-minutes: 10
+        run: cargo test --locked -p projectatlas-cli --test e2e windows_installer_obsolete_mcp_handoff_ -- --test-threads=1
+
+      - name: macOS unsupported parser-pack boundary E2E
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli parser_pack_supported_only_commands_refuse_unsupported_macos_before_state_access --test e2e
+
+      - name: MCP project binding E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli mcp_server_stays_bound_to_one_project_database --test e2e
+
+      - name: Persistent MCP Git config stdin E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli persistent_mcp_stdin_does_not_block_repository_startup_probes --test e2e
+
+      - name: Bare-root database preflight E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli implicit_bare_root --test e2e -- --nocapture
+
+      - name: Generated MCP database authority E2E
+        timeout-minutes: 5
+        run: cargo test --locked -p projectatlas-cli generated_mcp_config_preserves_explicit_conventional_database_authority --test e2e -- --exact --nocapture
+
+      - name: Desktop dashboard compile check
+        if: matrix.label == 'windows'
+        timeout-minutes: 20
+        run: cargo check --locked -p projectatlas-desktop --all-features

@@ -1,0 +1,45 @@
+# Purpose: Compile-check the Windows desktop dashboard.
+
+name: 05-Desktop-Check
+
+# /**
+#  * Purpose: Catch compile errors in projectatlas-desktop before they reach a local test.
+#  */
+
+# 01-CI only runs on main and dev, so nothing verified this fork's working branch.
+# A single Windows job is deliberate: the full 01-CI matrix (verify plus e2e-smoke on
+# four operating systems) would run on every push here and cost far more than the one
+# question this workflow answers — does the desktop app still compile?
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push makes an in-flight check pointless.
+concurrency:
+  group: desktop-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTUP_TOOLCHAIN: "1.93.1"
+
+jobs:
+  compile:
+    name: desktop compile check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup default "$RUSTUP_TOOLCHAIN"
+
+      - name: Desktop dashboard compile check
+        timeout-minutes: 30
+        run: cargo check --locked -p projectatlas-desktop --all-features
