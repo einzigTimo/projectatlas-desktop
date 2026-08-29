@@ -1,5 +1,5 @@
-blank_issues_enabled: true
+﻿blank_issues_enabled: false
 contact_links:
-  - name: ProjectAtlas documentation
-    url: https://github.com/styler-ai/ProjectAtlas#readme
-    about: Read the current quickstart and workflow documentation.
+  - name: Sicherheitsproblem melden
+    url: https://github.com/einzigTimo
+    about: Bitte keine Sicherheitslücken öffentlich melden – siehe SECURITY.md.
