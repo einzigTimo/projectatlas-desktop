@@ -15,7 +15,7 @@
 
 use crate::app::atlas::AtlasView;
 use crate::app::error::{AppError, AppResult};
-use crate::app::registry::{self, ProjectSource, ProjectStatus, RegisteredProject};
+use crate::app::registry::{self, ProjectSource, ProjectStatus, PurposeSummary, RegisteredProject};
 use crate::app::state::{ACTIVITY_LIMIT, AppState, Payload, ProjectBadge};
 use crate::app::view::{ActivityView, OverviewView, TrendView};
 use crate::app::{polling, query};
@@ -51,6 +51,8 @@ pub(crate) struct ProjectView {
     pub(crate) status: ProjectStatusView,
     /// Failure reason when the status is [`ProjectStatusView::OpenError`].
     pub(crate) status_message: Option<String>,
+    /// Per-purpose-category node counts, or `None` when the database is unreachable.
+    pub(crate) purpose_summary: Option<PurposeSummary>,
 }
 
 /// The sidebar payload: all known projects plus the current selection.
@@ -79,6 +81,7 @@ fn project_view(project: &RegisteredProject) -> ProjectView {
         manual: project.source == ProjectSource::Manual,
         status,
         status_message,
+        purpose_summary: project.purpose_summary.clone(),
     }
 }
 
@@ -335,4 +338,77 @@ pub(crate) async fn calibrate_project(
         )
         .await;
     Ok(overview)
+}
+
+// ── P4 – Heading selectors ────────────────────────────────────────────────────
+
+/// One Markdown heading extracted from an indexed file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeadingEntry {
+    /// Heading level (1–6).
+    pub(crate) level: u8,
+    /// Heading text as it appears in the source.
+    pub(crate) text: String,
+    /// URL-safe anchor slug that can be appended as `#<anchor>` to a file path.
+    pub(crate) anchor: String,
+}
+
+/// Extract all Markdown headings from one indexed file.
+///
+/// Returns an empty list for non-Markdown files or files whose text is not
+/// stored in the index. Absence of a file returns an empty list so the
+/// frontend can show "no sections" instead of an error.
+///
+/// # Errors
+///
+/// Returns an error when the project id is unknown or the database cannot be
+/// opened.
+#[tauri::command]
+pub(crate) async fn get_file_headings(
+    state: State<'_, AppState>,
+    project_id: String,
+    file_path: String,
+) -> AppResult<Vec<HeadingEntry>> {
+    let (db_path, root) = locate(&state, &project_id).await?;
+    blocking(move || query::file_headings(&db_path, &root, &file_path)).await
+}
+
+// ── P5 – Purpose routing ──────────────────────────────────────────────────────
+
+/// List projects that have at least one indexed node in the requested purpose category.
+///
+/// `purpose_category` is matched against the first path segment of each node's
+/// purpose string (e.g. `"source"`, `"test"`, `"config"`, `"docs"`). The
+/// special value `"(none)"` selects projects that contain nodes without any
+/// assigned purpose.
+///
+/// Returns the same [`ProjectListView`] shape as [`list_projects`] so the
+/// frontend can reuse the same rendering path with an active filter applied.
+///
+/// # Errors
+///
+/// Never fails as a whole: unknown categories return an empty projects list.
+#[tauri::command]
+pub(crate) async fn list_projects_by_purpose(
+    state: State<'_, AppState>,
+    purpose_category: String,
+) -> AppResult<ProjectListView> {
+    let registry = state.registry().await;
+    let projects = registry
+        .projects
+        .iter()
+        .filter(|project| {
+            project
+                .purpose_summary
+                .as_ref()
+                .map(|summary| summary.by_category.contains_key(&purpose_category))
+                .unwrap_or(false)
+        })
+        .map(project_view)
+        .collect();
+    Ok(ProjectListView {
+        projects,
+        active_project_id: state.active_project_id().await,
+    })
 }

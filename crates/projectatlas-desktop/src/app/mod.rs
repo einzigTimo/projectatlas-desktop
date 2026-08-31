@@ -44,6 +44,8 @@ pub(crate) fn run() -> Result<(), tauri::Error> {
             commands::get_project_badges,
             commands::get_atlas_map,
             commands::calibrate_project,
+            commands::get_file_headings,
+            commands::list_projects_by_purpose,
             updater::app_version,
             updater::check_for_update,
             updater::install_update,

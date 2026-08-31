@@ -97,6 +97,12 @@ pub(crate) struct OverviewView {
     pub(crate) buckets: Vec<BucketView>,
     /// Optional local tokenizer calibration.
     pub(crate) calibration: Option<CalibrationView>,
+    /// Whether calibration has not yet been run for this project.
+    ///
+    /// `true` when `calibration` is `None` **and** the project has at least one
+    /// recorded call. Surfaced to the frontend so it can show a visible hint and
+    /// a "Start calibration" button instead of silent zero-baseline numbers.
+    pub(crate) calibration_needed: bool,
     /// Whether `<root>/.mcp.json` registers the `projectatlas` MCP server.
     ///
     /// Claude Code only auto-loads that file, so a project with a map but no
@@ -213,6 +219,7 @@ impl OverviewView {
                     provider: calibration.provider.clone(),
                     model: calibration.model.clone(),
                 }),
+            calibration_needed: overview.calibration.is_none() && overview.calls > 0,
             // Filesystem state, not telemetry: filled in by `query::overview`.
             claude_mcp_registered: false,
         }

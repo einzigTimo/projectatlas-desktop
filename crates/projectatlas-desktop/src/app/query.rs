@@ -114,3 +114,109 @@ pub(crate) fn recent_activity(
         .map(ActivityView::from_core)
         .collect())
 }
+
+// ── P4 – Heading selectors ────────────────────────────────────────────────────
+
+/// Extract Markdown headings from one indexed file.
+///
+/// Reads the stored file text (if any) and parses ATX headings (lines starting
+/// with one to six `#` characters). Returns an empty list for non-Markdown files
+/// or files not present in the text index.
+///
+/// The anchor slug follows the GitHub Markdown convention: lowercase, spaces
+/// replaced with `-`, all characters outside `[a-z0-9-]` removed.
+pub(crate) fn file_headings(
+    db_path: &Path,
+    root: &Path,
+    file_path: &str,
+) -> AppResult<Vec<crate::app::commands::HeadingEntry>> {
+    // Only process Markdown files.
+    let lower = file_path.to_lowercase();
+    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
+        return Ok(Vec::new());
+    }
+    let store = open(db_path, root)?;
+    let Some(indexed) = store.load_file_text(file_path)? else {
+        return Ok(Vec::new());
+    };
+    Ok(extract_headings(&indexed.content))
+}
+
+/// Parse ATX headings out of Markdown source text.
+fn extract_headings(text: &str) -> Vec<crate::app::commands::HeadingEntry> {
+    text.lines()
+        .filter_map(|line| {
+            // Count leading `#` characters precisely (char count, not byte count)
+            // to avoid overflow on pathological inputs with many `#` characters.
+            let level = line.chars().take_while(|c| *c == '#').count();
+            if level == 0 || level > 6 {
+                return None;
+            }
+            let rest = &line[level..];
+            // The character after the `#` markers must be a space.
+            let after = rest.strip_prefix(' ')?;
+            let heading_text = after.trim().to_string();
+            if heading_text.is_empty() {
+                return None;
+            }
+            let anchor = slug_anchor(&heading_text);
+            Some(crate::app::commands::HeadingEntry {
+                level: level as u8,
+                text: heading_text,
+                anchor,
+            })
+        })
+        .collect()
+}
+
+/// Derive a GitHub-style anchor slug from a heading text.
+///
+/// Lowercase, spaces → `-`, retain only `[a-z0-9-]`.
+fn slug_anchor(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|ch| if ch == ' ' { '-' } else { ch })
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect()
+}
+
+#[cfg(test)]
+mod heading_tests {
+    use super::{extract_headings, slug_anchor};
+
+    #[test]
+    fn slug_spaces_become_dashes() {
+        assert_eq!(slug_anchor("Quick Start"), "quick-start");
+    }
+
+    #[test]
+    fn slug_strips_special_chars() {
+        assert_eq!(slug_anchor("What's new?"), "whats-new");
+    }
+
+    #[test]
+    fn extract_headings_levels() {
+        let md = "# Title\n## Section\n### Sub\nNot a heading\n";
+        let headings = extract_headings(md);
+        assert_eq!(headings.len(), 3);
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[0].text, "Title");
+        assert_eq!(headings[0].anchor, "title");
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[2].level, 3);
+    }
+
+    #[test]
+    fn extract_headings_ignores_non_atx() {
+        // No space after `#` → not a valid ATX heading.
+        let md = "#NoSpace\n# Valid\n";
+        let headings = extract_headings(md);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].text, "Valid");
+    }
+
+    #[test]
+    fn extract_headings_empty_input() {
+        assert!(extract_headings("").is_empty());
+    }
+}

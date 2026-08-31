@@ -3,17 +3,27 @@
 //! `ProjectAtlas` itself deliberately has no cross-repository project registry
 //! (see `docs/projectatlas-mcp-multi-project-routing-spec.md`), so the desktop
 //! app keeps its own small local list instead of relying on anything upstream.
+//!
+//! ## Registry migrations
+//!
+//! When the on-disk schema changes, `load()` applies a forward migration chain
+//! before returning. Each version step is handled by a dedicated `migrate_vN`
+//! function so new fields can be back-filled without losing existing entries.
+//! `REGISTRY_VERSION` must be bumped and a new handler added for every
+//! incompatible change.
 
 use crate::app::error::{AppError, AppResult};
 use projectatlas_db::AtlasStore;
+use projectatlas_core::NodeKind;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Registry schema version, bumped whenever the on-disk shape changes incompatibly.
-const REGISTRY_VERSION: u32 = 1;
+const REGISTRY_VERSION: u32 = 2;
 /// Registry directory name under `%LOCALAPPDATA%`.
 const REGISTRY_DIR_NAME: &str = "ProjectAtlasDesktop";
 /// Registry file name inside [`REGISTRY_DIR_NAME`].
@@ -48,6 +58,19 @@ pub(crate) enum ProjectStatus {
     },
 }
 
+/// Per-purpose-category node count for one project.
+///
+/// Built from the indexed nodes during probing so the sidebar can show a
+/// compact purpose-category badge without opening the database a second time.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PurposeSummary {
+    /// Number of nodes that carry an explicit purpose string, by category label.
+    pub(crate) by_category: HashMap<String, usize>,
+    /// Total number of indexed nodes across all categories.
+    pub(crate) total_nodes: usize,
+}
+
 /// One project known to the desktop app.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RegisteredProject {
@@ -65,6 +88,11 @@ pub(crate) struct RegisteredProject {
     pub(crate) status: ProjectStatus,
     /// Unix epoch seconds when this entry was last confirmed reachable.
     pub(crate) last_seen_epoch: i64,
+    /// Per-purpose-category node count read from the last successful probe.
+    ///
+    /// `None` when the database could not be opened on the last check.
+    #[serde(default)]
+    pub(crate) purpose_summary: Option<PurposeSummary>,
 }
 
 /// The full on-disk registry contents.
@@ -105,14 +133,50 @@ fn registry_path() -> AppResult<PathBuf> {
     Ok(dir.join(REGISTRY_FILE_NAME))
 }
 
-/// Load the registry from disk, returning a fresh default when none exists yet.
+// ── Migrations ────────────────────────────────────────────────────────────────
+
+/// Apply all pending migrations from `current_version` to [`REGISTRY_VERSION`].
+///
+/// Each `migrate_vN` function is called exactly once per version bump that is
+/// still ahead of the stored version. Migrations are additive: they back-fill
+/// `#[serde(default)]` fields so existing entries survive round-trips.
+fn apply_migrations(file: &mut RegistryFile) {
+    if file.version < 2 {
+        migrate_v2(file);
+        file.version = 2;
+    }
+    // Add future migrations here:
+    // if file.version < 3 { migrate_v3(file); file.version = 3; }
+}
+
+/// v1 → v2: back-fill `purpose_summary` with `None` for all existing entries.
+///
+/// The field carries `#[serde(default)]` so deserialisation already supplies
+/// `None`; this handler is a no-op today but documents the migration boundary
+/// and keeps the chain explicit.
+fn migrate_v2(_file: &mut RegistryFile) {
+    // `purpose_summary` defaults to `None` via `#[serde(default)]`.
+    // No structural change needed; the version bump records that the field exists.
+}
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+
+/// Load the registry from disk, applying pending migrations before returning.
+///
+/// Returns a fresh default when no registry file exists yet.
 pub(crate) fn load() -> AppResult<RegistryFile> {
     let path = registry_path()?;
     if !path.exists() {
         return Ok(RegistryFile::default());
     }
     let raw = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&raw)?)
+    let mut file: RegistryFile = serde_json::from_str(&raw)?;
+    if file.version < REGISTRY_VERSION {
+        apply_migrations(&mut file);
+        // Persist the migrated file so future loads start at the current version.
+        save(&file)?;
+    }
+    Ok(file)
 }
 
 /// Persist the registry to disk.
@@ -145,17 +209,21 @@ fn probe_project(root: &Path, source: ProjectSource) -> RegisteredProject {
         || root.to_string_lossy().into_owned(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let status = if db_path.exists() {
+    let (status, purpose_summary) = if db_path.exists() {
         match AtlasStore::open_read_only_for_project(&db_path, root) {
-            Ok(_store) => ProjectStatus::Ok,
-            Err(error) => ProjectStatus::OpenError {
-                // Route through AppError so an outdated schema reads as the actionable
-                // German hint here too, not only in the query path.
-                message: AppError::from(error).to_string(),
-            },
+            Ok(store) => {
+                let summary = build_purpose_summary(&store);
+                (ProjectStatus::Ok, summary)
+            }
+            Err(error) => (
+                ProjectStatus::OpenError {
+                    message: AppError::from(error).to_string(),
+                },
+                None,
+            ),
         }
     } else {
-        ProjectStatus::NotFound
+        (ProjectStatus::NotFound, None)
     };
     RegisteredProject {
         id: project_id(root),
@@ -165,7 +233,40 @@ fn probe_project(root: &Path, source: ProjectSource) -> RegisteredProject {
         source,
         status,
         last_seen_epoch: now_epoch(),
+        purpose_summary,
     }
+}
+
+/// Build a [`PurposeSummary`] from every indexed node in `store`.
+///
+/// Counts nodes by the first path segment of their purpose string (e.g. `source`
+/// from `source/tests`). Nodes without a purpose are counted under the special
+/// category `"(none)"`. `total_nodes` is the sum of all per-category counts and
+/// therefore equals the number of non-folder nodes. Never errors: a failing load
+/// returns `None` so the caller can store `None` on the registry entry and show
+/// an empty badge instead.
+fn build_purpose_summary(store: &AtlasStore) -> Option<PurposeSummary> {
+    let nodes = store.load_nodes().ok()?;
+    let mut by_category: HashMap<String, usize> = HashMap::new();
+    for indexed in &nodes {
+        if indexed.node.kind == NodeKind::Folder {
+            // Skip folder nodes: purpose summaries reflect file-level content.
+            continue;
+        }
+        let category = indexed
+            .purpose
+            .purpose
+            .as_deref()
+            .map(|p| p.split('/').next().unwrap_or(p).to_string())
+            .unwrap_or_else(|| "(none)".to_string());
+        *by_category.entry(category).or_insert(0) += 1;
+    }
+    // Derive total from the filtered categories so it matches the sum of by_category.
+    let total_nodes = by_category.values().sum();
+    Some(PurposeSummary {
+        by_category,
+        total_nodes,
+    })
 }
 
 /// Re-check every already-registered project's reachability without discovering new ones.
