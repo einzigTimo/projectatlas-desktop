@@ -51,6 +51,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Enforce Develop Zentrale for publication
+        if: ${{ !inputs.prepublish_only }}
+        run: |
+          echo "Produktive Releases dürfen nicht manuell gestartet werden." >&2
+          echo "Verwende die registrierte persistente Vormerkung der Develop Zentrale." >&2
+          exit 1
+
       - name: Classify release version
         id: release_version
         run: |

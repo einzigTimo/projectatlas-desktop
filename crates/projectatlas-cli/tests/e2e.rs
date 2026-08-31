@@ -86,6 +86,7 @@ const INSTALLER_RS_FILE_NAME: &str = "installer.rs";
 const LIB_RS_FILE_NAME: &str = "lib.rs";
 const SCANNED_RS_FILE_NAME: &str = "scanned.rs";
 const GIT_DIR_NAME: &str = ".git";
+const ROOT_MCP_CONFIG_FILE_NAME: &str = ".mcp.json";
 const MAIN_CHECKOUT_DIR_NAME: &str = "main-checkout";
 const LINKED_CHECKOUTS_DIR_NAME: &str = "branches";
 const BARE_REPOSITORY_DIR_NAME: &str = "repository.git";
@@ -3756,7 +3757,7 @@ fn init_bootstrap_creates_db_scan_report_and_host_configs() -> Result<(), Box<dy
         }
     }
     let root_mcp_config: Value =
-        serde_json::from_str(&fs::read_to_string(repo.join(".mcp.json"))?)?;
+        serde_json::from_str(&fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?)?;
     if root_mcp_config["mcpServers"]["projectatlas"]["command"]
         .as_str()
         .is_none()
@@ -5801,7 +5802,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     let repo = temp.path().join(TEST_REPO_DIR);
     fs::create_dir(&repo)?;
     fs::write(
-        repo.join(".mcp.json"),
+        repo.join(ROOT_MCP_CONFIG_FILE_NAME),
         "{\n  \"mcpServers\": {\n    \"other-server\": {\n      \"command\": \"other\",\n      \"args\": []\n    }\n  }\n}\n",
     )?;
 
@@ -5824,7 +5825,8 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     )?;
     require_json_string(&report, &["host_configs", "3", "status"], "verified")?;
 
-    let merged: Value = serde_json::from_str(&fs::read_to_string(repo.join(".mcp.json"))?)?;
+    let merged: Value =
+        serde_json::from_str(&fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?)?;
     if merged["mcpServers"]["other-server"]["command"].as_str() != Some("other") {
         return Err(io::Error::other("init dropped an existing .mcp.json server entry").into());
     }
@@ -5853,7 +5855,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     require_json_string(&rerun_report, &["host_configs", "3", "status"], "exists")?;
 
     // Invalid JSON must fail loudly instead of being clobbered.
-    fs::write(repo.join(".mcp.json"), "{ not json")?;
+    fs::write(repo.join(ROOT_MCP_CONFIG_FILE_NAME), "{ not json")?;
     let invalid_output = Command::cargo_bin("projectatlas")?
         .current_dir(&repo)
         .args(["--format", "json", "init", "--no-scan"])
@@ -5868,7 +5870,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
         &["host_configs", "3", "error"],
         "is not valid JSON",
     )?;
-    if fs::read_to_string(repo.join(".mcp.json"))? != "{ not json" {
+    if fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != "{ not json" {
         return Err(io::Error::other("init modified an invalid .mcp.json").into());
     }
 
@@ -6166,7 +6168,7 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
     let codex_fallback_mcp = workspace_root
         .join("plugins")
         .join("projectatlas")
-        .join(".mcp.json");
+        .join(ROOT_MCP_CONFIG_FILE_NAME);
     let claude_manifest = fs::read_to_string(
         workspace_root
             .join("plugins")
