@@ -20,6 +20,18 @@
   let activeProjectId = null;
   /** Calendar grouping the trend panel shows. */
   let trendWindow = "day";
+  /** Complete unfiltered project list; filtering must never replace global state. */
+  let projectCatalog = { projects: [], activeProjectId: null };
+  /** Free-text Purpose query currently applied to the sidebar. */
+  let purposeFilter = "";
+  /** Invalidates an older filter response when the user keeps typing. */
+  let purposeFilterSerial = 0;
+  /** Short debounce for the local-purpose search command. */
+  let purposeFilterTimer = null;
+  /** Prevents overlapping multi-project database searches. */
+  let purposeFilterInFlight = false;
+  /** Remembers that the newest text must run once the active search completes. */
+  let purposeFilterQueued = false;
 
   /** Turn a backend error into a readable German sentence. */
   function message(error) {
@@ -30,20 +42,82 @@
   }
 
   /** Find the display name of the active project inside one list payload. */
-  function activeProjectName(payload) {
-    if (!payload || !payload.projects) return null;
-    const match = payload.projects.find(function (project) {
+  function activeProject() {
+    const match = projectCatalog.projects.find(function (project) {
       return project.id === activeProjectId;
     });
-    return match ? match.displayName : null;
+    return match || null;
+  }
+
+  /** Render either the full catalog or one filtered result without changing selection. */
+  function renderProjectList(payload, query) {
+    const visibleProjects = (payload && payload.projects) || [];
+    projects.render(
+      { projects: visibleProjects, activeProjectId: activeProjectId },
+      { activeProject: activeProject(), filterQuery: query || "" }
+    );
+  }
+
+  /** Refresh the visible sidebar for the current Purpose text. */
+  function refreshPurposeFilter() {
+    const query = purposeFilter;
+    const serial = ++purposeFilterSerial;
+    if (!query) {
+      renderProjectList(projectCatalog, "");
+      projects.setFilterStatus("");
+      return Promise.resolve(projectCatalog);
+    }
+    if (query.length < 2) {
+      renderProjectList(projectCatalog, "");
+      projects.setFilterStatus("Mindestens 2 Zeichen eingeben.");
+      return Promise.resolve(projectCatalog);
+    }
+    if (purposeFilterInFlight) {
+      purposeFilterQueued = true;
+      return Promise.resolve(projectCatalog);
+    }
+
+    purposeFilterInFlight = true;
+    projects.setFilterStatus("Suche …");
+    return api
+      .listProjectsByPurpose(query)
+      .then(function (payload) {
+        if (serial !== purposeFilterSerial || query !== purposeFilter) return projectCatalog;
+        const count = (payload && payload.projects && payload.projects.length) || 0;
+        renderProjectList(payload, query);
+        projects.setFilterStatus(fmtFilterCount(count));
+        return projectCatalog;
+      })
+      .catch(function (error) {
+        if (serial === purposeFilterSerial && query === purposeFilter) {
+          projects.setFilterStatus(message(error), true);
+        }
+        // A decorative filter failure must not block project switching or panel refreshes.
+        return projectCatalog;
+      })
+      .then(function (result) {
+        purposeFilterInFlight = false;
+        if (!purposeFilterQueued) return result;
+        purposeFilterQueued = false;
+        return refreshPurposeFilter();
+      });
+  }
+
+  /** German result count kept here so projects.js only owns rendering. */
+  function fmtFilterCount(count) {
+    return count === 1 ? "1 Treffer" : String(count) + " Treffer";
   }
 
   /** Apply one project list payload to the sidebar and the active selection. */
   function applyProjectList(payload) {
-    activeProjectId = (payload && payload.activeProjectId) || null;
-    projects.render(payload);
-    setup.setProject(activeProjectId, activeProjectName(payload));
-    return payload;
+    projectCatalog = {
+      projects: (payload && payload.projects) || [],
+      activeProjectId: (payload && payload.activeProjectId) || null
+    };
+    activeProjectId = projectCatalog.activeProjectId;
+    const active = activeProject();
+    setup.setProject(activeProjectId, active ? active.displayName : null);
+    return refreshPurposeFilter().then(function () { return payload; });
   }
 
   /** Load every panel for the active project. */
@@ -53,12 +127,18 @@
         "Kein Projekt ausgewählt. Über „Scan“ oder „+ Ordner“ links ein ProjectAtlas-Projekt hinzufügen.",
         false
       );
+      trend.clear();
       trend.setNote("Kein Projekt ausgewählt.", false);
+      activity.clear();
       activity.setNote("Kein Projekt ausgewählt.", false);
-      atlas.draw(null);
+      atlas.draw(null, null);
       return Promise.resolve();
     }
     const projectId = activeProjectId;
+    overview.setLoading();
+    trend.setLoading();
+    activity.setLoading();
+    atlas.setLoading(projectId);
 
     const overviewLoad = api
       .getOverview(projectId)
@@ -100,11 +180,11 @@
       .getAtlasMap(projectId)
       .then(function (view) {
         if (projectId !== activeProjectId) return;
-        atlas.draw(view);
+        atlas.draw(view, projectId);
       })
       .catch(function () {
         if (projectId !== activeProjectId) return;
-        atlas.draw(null);
+        atlas.draw(null, projectId);
       });
 
     return Promise.all([overviewLoad, trendLoad, activityLoad, atlasLoad]);
@@ -139,6 +219,8 @@
   function wireSidebar() {
     const rescanButton = document.getElementById("btnRescan");
     const addButton = document.getElementById("btnAdd");
+    const filterInput = document.getElementById("purposeFilter");
+    const filterClear = document.getElementById("purposeFilterClear");
 
     rescanButton.addEventListener("click", function () {
       rescanButton.disabled = true;
@@ -169,6 +251,42 @@
     });
 
     projects.setSelectHandler(selectProject);
+
+    /** Adopt the input value and refresh now or after a brief typing pause. */
+    function updatePurposeFilter(immediate) {
+      purposeFilter = filterInput ? filterInput.value.trim() : "";
+      purposeFilterSerial += 1;
+      if (filterClear) filterClear.disabled = purposeFilter.length === 0;
+      if (purposeFilterTimer !== null) window.clearTimeout(purposeFilterTimer);
+      purposeFilterTimer = null;
+      if (immediate || !purposeFilter) {
+        refreshPurposeFilter();
+        return;
+      }
+      purposeFilterTimer = window.setTimeout(function () {
+        purposeFilterTimer = null;
+        refreshPurposeFilter();
+      }, 300);
+    }
+
+    if (filterInput) {
+      filterInput.addEventListener("input", function () { updatePurposeFilter(false); });
+      filterInput.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        updatePurposeFilter(true);
+      });
+    }
+    if (filterClear) {
+      filterClear.disabled = true;
+      filterClear.addEventListener("click", function () {
+        if (filterInput) {
+          filterInput.value = "";
+          filterInput.focus();
+        }
+        updatePurposeFilter(true);
+      });
+    }
   }
 
   /** Wire the tab strip. */
@@ -216,31 +334,45 @@
      every indexed file, so it must be the user's decision, not a side effect of opening
      a tab. */
   function wireCalibration() {
-    const button = document.getElementById("calibBtn");
+    const buttons = [
+      document.getElementById("calibBtn"),
+      document.getElementById("calibrationHintBtn")
+    ].filter(function (button) { return !!button; });
     const picker = document.getElementById("calibTokenizer");
-    if (!button) return;
+    if (buttons.length === 0) return;
 
-    button.addEventListener("click", function () {
+    function calibrate() {
       if (!activeProjectId) return;
       const projectId = activeProjectId;
       const tokenizer = picker ? picker.value : "o200k_base";
-      button.disabled = true;
-      const previous = button.textContent;
-      button.textContent = "Messe …";
+      const previous = buttons.map(function (button) { return button.textContent; });
+      overview.setCalibrationStatus("Kalibrierung läuft …", false);
+      buttons.forEach(function (button) {
+        button.disabled = true;
+        button.textContent = "Messe …";
+      });
 
       api
         .calibrateProject(projectId, tokenizer)
         .then(function (data) {
           if (projectId !== activeProjectId) return;
           overview.render(data, { flash: true });
+          overview.setCalibrationStatus("Kalibrierung abgeschlossen.", false);
         })
         .catch(function (error) {
-          overview.setNote(message(error), true);
+          if (projectId !== activeProjectId) return;
+          overview.setCalibrationStatus(message(error), true);
         })
         .then(function () {
-          button.disabled = false;
-          button.textContent = previous;
+          buttons.forEach(function (button, index) {
+            button.disabled = false;
+            button.textContent = previous[index];
+          });
         });
+    }
+
+    buttons.forEach(function (button) {
+      button.addEventListener("click", calibrate);
     });
   }
 
@@ -294,11 +426,10 @@
     api
       .listProjects()
       .then(function (payload) {
-        applyProjectList(payload);
-        if (payload && payload.projects && payload.projects.length === 0) {
-          return api.rescanProjects().then(applyProjectList);
-        }
-        return payload;
+        const isEmpty = payload && payload.projects && payload.projects.length === 0;
+        return applyProjectList(payload).then(function () {
+          return isEmpty ? api.rescanProjects().then(applyProjectList) : payload;
+        });
       })
       .then(loadActiveProject)
       .then(loadBadges)

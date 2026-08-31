@@ -232,7 +232,7 @@ pub(crate) async fn get_project_connection(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<ProjectConnectionView> {
-    let registry = state.registry().await;
+    let registry = state.registry_result().await?;
     let project = registry::find(&registry, &project_id)?;
     let root = project.root.clone();
     drop(registry);
@@ -330,7 +330,7 @@ pub(crate) async fn connect_project(
     project_id: String,
     scan: bool,
 ) -> AppResult<ConnectOutcome> {
-    let registry = state.registry().await;
+    let registry = state.registry_result().await?;
     let project = registry::find(&registry, &project_id)?.clone();
     drop(registry);
 
@@ -357,7 +357,7 @@ pub(crate) async fn connect_all_projects(
     scan: bool,
 ) -> AppResult<Vec<ConnectOutcome>> {
     let projects: Vec<RegisteredProject> = {
-        let registry = state.registry().await;
+        let registry = state.registry_result().await?;
         registry.projects.clone()
     };
 

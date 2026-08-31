@@ -22,6 +22,15 @@
       <button class="icon-btn" id="btnAdd" type="button">+ Ordner</button>
       <button class="icon-btn" id="btnRescan" type="button">&#10227; Scan</button>
     </div>
+    <div class="purpose-filter">
+      <label for="purposeFilter">Purpose suchen</label>
+      <div class="purpose-filter-row">
+        <input id="purposeFilter" type="search" autocomplete="off" spellcheck="false"
+          placeholder="z. B. Deployment" aria-describedby="purposeFilterStatus">
+        <button id="purposeFilterClear" type="button" title="Purpose-Filter löschen">Alle</button>
+      </div>
+      <div class="purpose-filter-status" id="purposeFilterStatus" aria-live="polite"></div>
+    </div>
     <div class="project-list" id="projectList"></div>
     <div class="sidebar-foot">
       <span class="live-pip pulse" id="livePip"></span>
@@ -64,6 +73,14 @@
                 <div><span class="k">Abfragen: </span><span class="v num" id="hdrCalls">–</span></div>
                 <div><span class="k">Schätzung: </span><span class="v" id="hdrEstimate">–</span></div>
               </div>
+            </div>
+
+            <div class="calibration-needed" id="calibrationNeeded" hidden>
+              <div>
+                <b>Kalibrierung empfohlen</b>
+                <span>Für dieses Projekt liegen Aufrufe vor, die Tokenwerte sind aber noch geschätzt.</span>
+              </div>
+              <button class="icon-btn" id="calibrationHintBtn" type="button">Jetzt kalibrieren</button>
             </div>
 
             <div class="panel">
@@ -154,10 +171,12 @@
             <div class="panel">
               <div class="panel-title"><span class="uc">Woher die Ersparnis kommt</span></div>
               <div class="panel-body" style="padding-top:8px;">
-                <table class="breakdown">
-                  <thead><tr><th>Anbieter / Modell</th><th>Baseline</th><th class="num">Aufrufe</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
-                  <tbody id="breakdownBody"></tbody>
-                </table>
+                <div class="table-scroll">
+                  <table class="breakdown">
+                    <thead><tr><th>Anbieter / Modell</th><th>Baseline</th><th class="num">Aufrufe</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+                    <tbody id="breakdownBody"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
@@ -173,6 +192,7 @@
                 </span>
               </div>
               <div class="panel-body calib-lines" id="calibLines"></div>
+              <div class="calib-action-status" id="calibActionStatus" aria-live="polite"></div>
             </div>
 
             <div class="status-bar">
@@ -192,6 +212,7 @@
                 <button class="map-btn" id="atlasExpand" type="button" title="Große Ansicht">&#9974;</button>
               </span>
             </div>
+            <div class="atlas-relations" id="atlasRelations"></div>
             <div class="atlas-canvas-wrap" id="atlasWrap">
               <div class="atlas-placeholder">Beziehungsgraph wird geladen …</div>
             </div>
@@ -221,10 +242,24 @@
         </div>
         <div class="panel" style="margin-top:10px;">
           <div class="panel-body" style="padding-top:8px;">
-            <table class="breakdown">
-              <thead><tr><th>Periode</th><th class="num">Aufrufe</th><th class="num">Ohne</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
-              <tbody id="trendBody"></tbody>
-            </table>
+            <div class="table-scroll">
+              <table class="breakdown">
+                <thead><tr><th>Periode</th><th class="num">Aufrufe</th><th class="num">Ohne</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+                <tbody id="trendBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="panel trend-buckets" style="margin-top:10px;">
+          <div class="panel-title"><span class="uc">Aufschlüsselung nach Ersparnis-Kategorie</span></div>
+          <div class="panel-body" style="padding-top:8px;">
+            <div class="table-scroll">
+              <table class="breakdown">
+                <thead><tr><th>Periode</th><th>Kategorie</th><th>Anbieter / Modell</th><th class="num">Aufrufe</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+                <tbody id="trendBucketBody"></tbody>
+              </table>
+            </div>
+            <div class="trend-limit-note" id="trendLimitNote" hidden></div>
           </div>
         </div>
       </section>
@@ -250,6 +285,7 @@
         </span>
         <button class="overlay-close" id="atlasCloseBtn" type="button" title="Schließen">&times;</button>
       </div>
+      <div class="atlas-relations" id="atlasBigRelations"></div>
       <div class="atlas-canvas-wrap" id="atlasBigWrap"></div>
       <div class="atlas-detail" id="atlasBigDetail" hidden></div>
       <div class="atlas-foot" id="atlasBigFoot"></div>

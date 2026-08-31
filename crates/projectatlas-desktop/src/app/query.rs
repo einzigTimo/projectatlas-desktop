@@ -7,6 +7,8 @@
 
 use crate::app::error::{AppError, AppResult};
 use crate::app::view::{ActivityView, OverviewView, TrendView};
+use projectatlas_core::graph::RepositoryNodePath;
+use projectatlas_core::symbols::{CodeSymbol, SymbolKind};
 use projectatlas_core::telemetry::TokenCalibrationOverview;
 use projectatlas_db::AtlasStore;
 use projectatlas_service::{TokenReport, TokenReportRequest, load_token_report};
@@ -115,108 +117,124 @@ pub(crate) fn recent_activity(
         .collect())
 }
 
+/// Return whether one project has a current purpose containing `query`.
+pub(crate) fn project_matches_purpose(db_path: &Path, root: &Path, query: &str) -> AppResult<bool> {
+    let store = open(db_path, root)?;
+    Ok(store.has_purpose_text_match(query)?)
+}
+
 // ── P4 – Heading selectors ────────────────────────────────────────────────────
 
-/// Extract Markdown headings from one indexed file.
+/// Maximum persisted headings returned for one document picker.
+const MAX_HEADING_SELECTORS: usize = 512;
+
+/// Load Markdown headings already parsed and persisted for one indexed file.
 ///
-/// Reads the stored file text (if any) and parses ATX headings (lines starting
-/// with one to six `#` characters). Returns an empty list for non-Markdown files
-/// or files not present in the text index.
-///
-/// The anchor slug follows the GitHub Markdown convention: lowercase, spaces
-/// replaced with `-`, all characters outside `[a-z0-9-]` removed.
+/// The symbol index owns Setext handling, Unicode slugs, duplicate-heading
+/// suffixes, and exact source locations. Reading those persisted symbols keeps
+/// the desktop result identical to agent navigation and avoids reparsing text.
 pub(crate) fn file_headings(
     db_path: &Path,
     root: &Path,
     file_path: &str,
 ) -> AppResult<Vec<crate::app::commands::HeadingEntry>> {
     // Only process Markdown files.
-    let lower = file_path.to_lowercase();
-    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
+    let markdown_extension = Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["md", "markdown", "mdx"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        });
+    if !markdown_extension {
         return Ok(Vec::new());
     }
+    let normalized = RepositoryNodePath::new(Path::new(file_path)).map_err(|error| {
+        AppError::Registry(format!("Ungueltiger Repository-Pfad {file_path}: {error}"))
+    })?;
     let store = open(db_path, root)?;
-    let Some(indexed) = store.load_file_text(file_path)? else {
-        return Ok(Vec::new());
-    };
-    Ok(extract_headings(&indexed.content))
+    Ok(store
+        .load_symbols_by_kinds(
+            normalized.as_str(),
+            &[SymbolKind::Heading],
+            MAX_HEADING_SELECTORS,
+        )?
+        .into_iter()
+        .map(|symbol| heading_entry(normalized.as_str(), symbol))
+        .collect())
 }
 
-/// Parse ATX headings out of Markdown source text.
-fn extract_headings(text: &str) -> Vec<crate::app::commands::HeadingEntry> {
-    text.lines()
-        .filter_map(|line| {
-            // Count leading `#` characters precisely (char count, not byte count)
-            // to avoid overflow on pathological inputs with many `#` characters.
-            let level = line.chars().take_while(|c| *c == '#').count();
-            if level == 0 || level > 6 {
-                return None;
-            }
-            let rest = &line[level..];
-            // The character after the `#` markers must be a space.
-            let after = rest.strip_prefix(' ')?;
-            let heading_text = after.trim().to_string();
-            if heading_text.is_empty() {
-                return None;
-            }
-            let anchor = slug_anchor(&heading_text);
-            Some(crate::app::commands::HeadingEntry {
-                level: level as u8,
-                text: heading_text,
-                anchor,
-            })
+/// Project one persisted heading symbol onto the desktop selector shape.
+fn heading_entry(file_path: &str, symbol: CodeSymbol) -> crate::app::commands::HeadingEntry {
+    let normalized_path = file_path.replace('\\', "/");
+    let anchor = symbol.signature;
+    crate::app::commands::HeadingEntry {
+        level: heading_level(symbol.detail.as_deref()),
+        text: symbol.name,
+        selector: format!("{normalized_path}#{anchor}"),
+        anchor,
+        line: symbol.line_start,
+    }
+}
+
+/// Read the Markdown heading level encoded by the canonical symbol parser.
+fn heading_level(detail: Option<&str>) -> u8 {
+    detail
+        .and_then(|detail| {
+            detail
+                .split(';')
+                .find_map(|part| part.strip_prefix("level=")?.parse::<u8>().ok())
         })
-        .collect()
-}
-
-/// Derive a GitHub-style anchor slug from a heading text.
-///
-/// Lowercase, spaces → `-`, retain only `[a-z0-9-]`.
-fn slug_anchor(text: &str) -> String {
-    text.to_lowercase()
-        .chars()
-        .map(|ch| if ch == ' ' { '-' } else { ch })
-        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
-        .collect()
+        .filter(|level| (1..=6).contains(level))
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
 mod heading_tests {
-    use super::{extract_headings, slug_anchor};
+    use super::{heading_entry, heading_level};
+    use projectatlas_core::symbols::{CodeSymbol, ParserKind, SymbolKind};
 
-    #[test]
-    fn slug_spaces_become_dashes() {
-        assert_eq!(slug_anchor("Quick Start"), "quick-start");
+    fn heading_symbol(name: &str, signature: &str, line: usize, level: u8) -> CodeSymbol {
+        CodeSymbol {
+            path: "docs/guide.md".to_string(),
+            language: Some("markdown".to_string()),
+            name: name.to_string(),
+            kind: SymbolKind::Heading,
+            signature: signature.to_string(),
+            exported: false,
+            documentation: None,
+            line_start: line,
+            line_end: line,
+            source_selector: None,
+            parent: None,
+            parser: ParserKind::Structural,
+            detail: Some(format!("level={level};slug={signature};occurrence=1")),
+        }
     }
 
     #[test]
-    fn slug_strips_special_chars() {
-        assert_eq!(slug_anchor("What's new?"), "whats-new");
+    fn persisted_unicode_and_duplicate_signatures_become_exact_selectors() {
+        let first = heading_entry(
+            "docs\\guide.md",
+            heading_symbol("Über Atlas", "über-atlas", 1, 1),
+        );
+        let duplicate = heading_entry(
+            "docs\\guide.md",
+            heading_symbol("Über Atlas", "über-atlas-1", 3, 2),
+        );
+        assert_eq!(first.level, 1);
+        assert_eq!(first.text, "Über Atlas");
+        assert_eq!(first.selector, "docs/guide.md#über-atlas");
+        assert_eq!(duplicate.level, 2);
+        assert_eq!(duplicate.anchor, "über-atlas-1");
+        assert_eq!(duplicate.selector, "docs/guide.md#über-atlas-1");
     }
 
     #[test]
-    fn extract_headings_levels() {
-        let md = "# Title\n## Section\n### Sub\nNot a heading\n";
-        let headings = extract_headings(md);
-        assert_eq!(headings.len(), 3);
-        assert_eq!(headings[0].level, 1);
-        assert_eq!(headings[0].text, "Title");
-        assert_eq!(headings[0].anchor, "title");
-        assert_eq!(headings[1].level, 2);
-        assert_eq!(headings[2].level, 3);
-    }
-
-    #[test]
-    fn extract_headings_ignores_non_atx() {
-        // No space after `#` → not a valid ATX heading.
-        let md = "#NoSpace\n# Valid\n";
-        let headings = extract_headings(md);
-        assert_eq!(headings.len(), 1);
-        assert_eq!(headings[0].text, "Valid");
-    }
-
-    #[test]
-    fn extract_headings_empty_input() {
-        assert!(extract_headings("").is_empty());
+    fn malformed_or_missing_heading_level_falls_back_safely() {
+        assert_eq!(heading_level(Some("level=7;slug=bad")), 1);
+        assert_eq!(heading_level(Some("slug=no-level")), 1);
+        assert_eq!(heading_level(Some("level=6;slug=valid")), 6);
     }
 }

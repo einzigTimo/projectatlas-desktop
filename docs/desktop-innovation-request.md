@@ -4,7 +4,18 @@ Closes #10
 
 ## Status
 
-Bereit zur Priorisierung und Zerlegung in Sub-Issues.
+Als priorisierter Request dokumentiert und im Desktop-Branch technisch umgesetzt. Die Punkte können
+weiterhin getrennt reviewed oder in Sub-Issues nachverfolgt werden.
+Die Abschnitte „Was fehlt" beschreiben dabei den Ausgangsstand auf `main`, gegen den die Umsetzung
+geprüft wird.
+
+## Fachliche Präzisierung
+
+ProjectAtlas behandelt `purpose` nicht als feste Kategorie. Ein Purpose ist eine freie, kurze
+Verantwortungsbeschreibung für eine Datei oder einen Ordner und besitzt zusätzlich einen Lifecycle-Status
+(`approved`, `suggested`, `stale`, `missing`) sowie eine Herkunft. Technische Dateirollen wie Quellcode,
+Dokumentation oder Konfiguration gehören zur separaten `ContentClassification`. Desktop-Anzeigen und
+Routing dürfen diese beiden Achsen nicht vermischen.
 
 ## Hintergrund
 
@@ -23,9 +34,9 @@ als priorisierbare Vorhaben fest.
 ### P1 – Purpose-Metadaten pro Datei und Ordner
 
 **Was es ist:**
-`styler-ai/ProjectAtlas` klassifiziert jede Datei und jeden Ordner mit einem `purpose`-Feld (z. B.
-`source`, `test`, `config`, `generated`, `docs`). Dieser Wert steuert, welche Einträge Agenten zuerst
-lesen, und ermöglicht gezielte Health-Checks.
+`styler-ai/ProjectAtlas` versieht Dateien und Ordner mit freien Purpose-Beschreibungen und einem
+prüfbaren Lifecycle-Status. Diese Verantwortungsbeschreibungen helfen Agenten bei der inhaltlichen
+Priorisierung und ermöglichen gezielte Health-Checks. Sie sind keine technische Dateiklassifikation.
 
 **Was in der Desktop-App fehlt:**
 Die `RegisteredProject`-Struktur und die Sidebar zeigen heute kein Purpose-Feld. Das bedeutet, dass die
@@ -34,7 +45,7 @@ primär relevant sind.
 
 **Vorgeschlagene Erweiterung:**
 1. `RegisteredProject` um ein optionales `purpose_summary`-Feld erweitern
-   (Anzahl klassifizierter Dateien nach Purpose-Kategorie, gelesen aus dem `AtlasStore`).
+   (Abdeckung nach `approved`, `suggested`, `stale` und `missing`, gelesen aus dem `AtlasStore`).
 2. `ProjectView` und das Frontend-Sidebar-Widget um eine kompakte Purpose-Anzeige ergänzen.
 3. Den `rescan`-Pfad so anpassen, dass Purpose-Zusammenfassungen beim Probing befüllt werden,
    ohne den Scan spürbar zu verlangsamen (Einzelabfrage je Projekt, kein Full-Walk).
@@ -78,8 +89,8 @@ einer leeren oder ungültigen Registry nach dem Update.
 `atlas_relations` und `atlas_slice` können Agenten direkt in dieses Netz einsteigen.
 
 **Was in der Desktop-App fehlt:**
-Die Views `AtlasView`, `OverviewView` und `TrendView` zeigen Token-Metriken und Aktivitäten, aber keine
-strukturellen Relationen zwischen Dateien oder Dokumenten.
+Der vorhandene Desktop-Atlas liest bereits einen begrenzten Repository-Graphen, verliert im UI aber
+Relationstyp, Richtung und vollständigen Pfad. Ein Datei-Drill-down zwischen Code und Dokumentation fehlt.
 
 **Vorgeschlagene Erweiterung:**
 1. `AtlasView` um einen `RelationSummary`-Block erweitern (Top-5 Dateien mit den meisten eingehenden
@@ -108,8 +119,9 @@ auf einen Abschnitt zu verweisen. Klick auf einen Eintrag öffnet das Dateisyste
 präzisen Dokument-Punkt.
 
 **Vorgeschlagene Erweiterung:**
-1. Im `query`-Modul eine `headings(db_path, root, file_path)`-Funktion ergänzen, die alle Heading-Anker
-   einer Markdown-Datei aus dem Store zurückgibt.
+1. Im `query`-Modul eine begrenzte Heading-Abfrage ergänzen, die bereits indizierte
+   `SymbolKind::Heading`-Einträge samt stabiler Signatur aus dem Store zurückgibt. Kein zweiter
+   Markdown-Parser im Desktop.
 2. Im Frontend einen „Abschnitt"-Picker (Dropdown) neben relevanten Dokument-Links anzeigen.
 3. Den Clipboard-Copy-Button so erweitern, dass er wahlweise `<datei>#<heading>` als Selektor kopiert,
    bereit zum Einfügen in ein Agent-Prompt oder ein MCP-Tool-Argument.
@@ -124,8 +136,8 @@ Ergänzt P3: erst Relationen, dann präzise Sprungziele innerhalb von Dokumenten
 **Was es ist:**
 `styler-ai/ProjectAtlas` leitet Agenten über `atlas_session_brief` und `atlas_folders` zu den
 Purpose-relevantesten Ordnern, bevor ein Vollscan gestartet wird. Dieses Routing-Modell lässt sich auf
-die Desktop-Oberfläche übertragen: Nutzer und Agenten sollen schnell zu „wo ist hier der Test-Code?" oder
-„zeig mir alles mit Purpose `config`" gelangen.
+die Desktop-Oberfläche übertragen: Nutzer und Agenten sollen Projekte über freie Ziele wie
+„Deployment vorbereiten" oder „Registry stabil migrieren" eingrenzen können.
 
 **Was in der Desktop-App fehlt:**
 Es gibt keine Purpose-Filterung in der Sidebar oder in der Atlas-Map. Alle Projekte werden gleichrangig
@@ -133,10 +145,12 @@ ohne thematische Filterung gezeigt.
 
 **Vorgeschlagene Erweiterung:**
 1. In `commands.rs` ein neues Tauri-Kommando `list_projects_by_purpose(purpose: String)` ergänzen, das
-   nur Projekte zurückgibt, in denen eine Purpose-Kategorie mindestens einen Eintrag hat.
-2. In der Sidebar ein Purpose-Filter-Dropdown ergänzen, das die Liste live einschränkt.
-3. In der Atlas-Map Purpose-Badges neben den Projekteinträgen anzeigen, analog zum vorhandenen
-   `ProjectStatusView`-Badge.
+   Purpose-Texte case-insensitiv durchsucht und nur passende Projekte zurückgibt. Pfade, Quelltext und
+   technische Content-Klassifikationen dürfen keine falschen Treffer erzeugen.
+2. In der Sidebar eine freie Purpose-Suche ergänzen, die die Liste live einschränkt, ohne die aktive
+   Projektauswahl oder den vollständigen Projektkatalog zu ersetzen.
+3. In den Sidebar-Projekteinträgen Purpose-Abdeckung und Lifecycle-Status kompakt anzeigen, analog zum
+   vorhandenen `ProjectStatusView`-Status.
 
 **Warum P5:**
 Schließt den Kreis: Purpose-Daten (P1) werden nicht nur angezeigt, sondern als Routing-Achse verwendet.
@@ -152,16 +166,16 @@ Aufschlüsselungen nach Bucket, Baseline-Szenario und Kalibrier-Stand. Die Deskt
 
 **Was in der Desktop-App fehlt:**
 - Keine Bucket-Aufschlüsselung in der Trend-Ansicht
-- Kein Kalibrier-Hinweis in der Overview, wenn noch keine Tokenizer-Kalibrierung stattgefunden hat
-- Kein direkter Link zu „Kalibrierung starten"
+- Der vorhandene Kalibrierbereich ist bei aufgezeichneten Aufrufen ohne Kalibrierung nicht prominent
+- Kein direkter Kalibrier-Aufruf unmittelbar am Hinweis
 
 **Vorgeschlagene Erweiterung:**
 1. `TrendView` erweitern, um die vorhandenen `BucketView`-Daten (bereits in `view.rs` definiert)
    im Frontend zu rendern.
 2. In `OverviewView` einen sichtbaren Kalibrier-Hinweis-Block ergänzen, wenn
    `calibration` in der View `None` ist.
-3. Einen „Kalibrierung starten"-Button auf der Overview-Seite verdrahten, der das vorhandene
-   `calibrate`-Kommando auslöst.
+3. Den vorhandenen Kalibrier-Ablauf zusätzlich direkt aus dem prominenten Overview-Hinweis aufrufbar
+   machen; die Messung bleibt ausdrücklich nutzergesteuert.
 
 **Warum P6 (niedrigste Priorität):**
 Die Infrastruktur ist bereits vorhanden (`BucketView`, `CalibrationView`, `calibrate`-Kommando), der

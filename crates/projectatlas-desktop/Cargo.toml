@@ -23,6 +23,7 @@ projectatlas-db.workspace = true
 projectatlas-service.workspace = true
 blake3.workspace = true
 ignore.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

@@ -56,6 +56,9 @@ window.PAD.api = (function () {
     listen: listen,
     pickFolder: pickFolder,
     listProjects: function () { return invoke("list_projects"); },
+    listProjectsByPurpose: function (purpose) {
+      return invoke("list_projects_by_purpose", { purpose: purpose });
+    },
     rescanProjects: function () { return invoke("rescan_projects"); },
     addProjectManual: function (path) { return invoke("add_project_manual", { path: path }); },
     removeProject: function (projectId) { return invoke("remove_project", { projectId: projectId }); },
@@ -64,6 +67,12 @@ window.PAD.api = (function () {
     getTrend: function (projectId, window_) { return invoke("get_trend", { projectId: projectId, window: window_ }); },
     getRecentActivity: function (projectId, limit) { return invoke("get_recent_activity", { projectId: projectId, limit: limit || null }); },
     getAtlasMap: function (projectId) { return invoke("get_atlas_map", { projectId: projectId }); },
+    getFileRelations: function (projectId, filePath) {
+      return invoke("get_file_relations", { projectId: projectId, filePath: filePath });
+    },
+    getFileHeadings: function (projectId, filePath) {
+      return invoke("get_file_headings", { projectId: projectId, filePath: filePath });
+    },
     getProjectBadges: function () { return invoke("get_project_badges"); },
     appVersion: function () { return invoke("app_version"); },
     checkForUpdate: function () { return invoke("check_for_update"); },
