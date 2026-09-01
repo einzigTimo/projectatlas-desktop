@@ -53,18 +53,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          PR_TITLE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.title // ""')"
-          PR_BODY="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')"
-          PR_MILESTONE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
-          text="$PR_TITLE $PR_BODY"
-          if ! [[ "$text" =~ (#[0-9]+|GH-[0-9]+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) ]]; then
-            echo "Pull request title or body must reference a GitHub issue." >&2
-            exit 1
-          fi
-          if [[ -z "$PR_MILESTONE" ]]; then
-            echo "Pull request must be assigned to a milestone." >&2
-            exit 1
-          fi
+          python3 .github/scripts/verify-pr-issue-milestones.py --self-test
+          python3 .github/scripts/verify-pr-issue-milestones.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER"
 
       - name: Issue checklist check
         if: github.event_name == 'pull_request' || github.event_name == 'push'
