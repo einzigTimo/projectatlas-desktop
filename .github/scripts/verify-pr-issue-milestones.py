@@ -91,7 +91,11 @@ def verify_pull_request(
     pull_request = issue_fetcher(repo, number)
     title = str(pull_request.get("title") or "")
     body = str(pull_request.get("body") or "")
-    references = issue_references(f"{title} {body}", repo)
+    references = [
+        reference
+        for reference in issue_references(f"{title} {body}", repo)
+        if reference != (repo, number)
+    ]
     return verify_references(repo, references, issue_fetcher=issue_fetcher)
 
 
@@ -124,6 +128,20 @@ def self_test() -> None:
     )
     assert failures == ["Referenced item octo/example#9 must be assigned to a milestone."]
 
+    fake_pull_request = {
+        "title": "Fix follow-up for #11 and self-reference #16",
+        "body": "",
+        "milestone": None,
+    }
+    failures = verify_pull_request(
+        "test-owner/test-repo",
+        16,
+        issue_fetcher=lambda repo, number: fake_pull_request
+        if number == 16
+        else fake_issues[(repo, number)],
+    )
+    assert failures == []
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -138,7 +156,10 @@ def main() -> int:
         try:
             self_test()
         except AssertionError as exc:
-            raise SystemExit("PR issue milestone policy self-test failed") from exc
+            detail = f": {exc}" if str(exc) else ""
+            raise SystemExit(
+                f"PR issue milestone policy self-test failed{detail}"
+            ) from exc
         print("PR issue milestone policy self-test passed")
         return 0
 
