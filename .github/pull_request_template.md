@@ -10,4 +10,4 @@ Refs #NNN
 
 ## Checkliste
 - Änderungen sind in klaren, aufeinander aufbauenden Entwicklungsschritten umgesetzt.
-- Use `Closes #NNN` only when this pull request completes the issue.
+- `Closes #NNN` nur verwenden, wenn dieser Pull Request das Issue vollständig abschließt.

@@ -29,27 +29,32 @@ window.PAD.projects = (function () {
     return " status-off";
   }
 
-  /** Build a stable signature of the list shape. */
+  /** Build a stable signature of the list shape.
+   *  JSON.stringify avoids separator collisions with project ids, paths, or
+   *  display names that contain the ":" or "|" characters used in naive joins. */
   function signature(projects, activeId, filterQuery, activeRoot) {
-    return projects
-      .map(function (project) {
+    return JSON.stringify({
+      projects: projects.map(function (project) {
         const purpose = project.purposeSummary;
         const byStatus = (purpose && purpose.byStatus) || {};
-        return [
-          project.id,
-          project.displayName,
-          project.root,
-          project.status,
-          project.statusMessage,
-          purpose && purpose.totalNodes,
-          purpose && purpose.withPurpose,
-          byStatus.approved,
-          byStatus.suggested,
-          byStatus.stale,
-          byStatus.missing
-        ].join(":");
-      })
-      .join("|") + "#" + (activeId || "") + "#" + (filterQuery || "") + "#" + (activeRoot || "");
+        return {
+          id: project.id,
+          name: project.displayName,
+          root: project.root,
+          status: project.status,
+          statusMessage: project.statusMessage || null,
+          totalNodes: (purpose && purpose.totalNodes) || null,
+          withPurpose: (purpose && purpose.withPurpose) || null,
+          approved: byStatus.approved || null,
+          suggested: byStatus.suggested || null,
+          stale: byStatus.stale || null,
+          missing: byStatus.missing || null
+        };
+      }),
+      activeId: activeId || null,
+      filterQuery: filterQuery || null,
+      activeRoot: activeRoot || null
+    });
   }
 
   /** Render the empty-state hint shown when no project is registered yet. */

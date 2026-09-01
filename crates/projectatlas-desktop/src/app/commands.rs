@@ -306,8 +306,9 @@ pub(crate) async fn get_file_relations(
 ///
 /// # Errors
 ///
-/// Never fails as a whole: projects that cannot be read are omitted instead of
-/// failing the badge refresh for all of them.
+/// Returns an error when the registry is blocked by an incompatible future version.
+/// Otherwise, projects that cannot be read are omitted instead of failing the badge
+/// refresh for all of them.
 #[tauri::command]
 pub(crate) async fn get_project_badges(state: State<'_, AppState>) -> AppResult<Vec<ProjectBadge>> {
     let registry = state.registry_result().await?;

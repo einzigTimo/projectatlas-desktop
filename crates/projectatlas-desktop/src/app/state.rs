@@ -41,8 +41,10 @@ struct ProjectFingerprints {
 struct Inner {
     /// Known projects, mirrored from disk.
     registry: RegistryFile,
-    /// Startup failure retained so a future-version registry cannot be overwritten.
-    registry_load_error: Option<String>,
+    /// True when the registry file has an incompatible version and must not be
+    /// overwritten by recovery commands.  False for recoverable parse/IO errors,
+    /// which leave the in-memory registry as the default so rescan can repair it.
+    registry_blocked: bool,
     /// Id of the project currently shown in the content area.
     active_project_id: Option<String>,
     /// Calendar grouping the trend panel currently displays.
@@ -76,15 +78,19 @@ pub(crate) struct ProjectBadge {
 impl AppState {
     /// Build the state from the on-disk registry, starting empty when none exists.
     pub(crate) fn load_or_default() -> Self {
-        let (registry, registry_load_error) = match load() {
-            Ok(registry) => (registry, None),
-            Err(error) => (RegistryFile::default(), Some(error.to_string())),
+        // Only a version-incompatible registry blocks recovery commands such as
+        // rescan or add_project_manual.  Ordinary parse / IO errors leave the
+        // in-memory registry as the default so those commands can repair the file.
+        let (registry, registry_blocked) = match load() {
+            Ok(registry) => (registry, false),
+            Err(AppError::Registry(_)) => (RegistryFile::default(), true),
+            Err(_) => (RegistryFile::default(), false),
         };
         let active_project_id = preferred_project(&registry.projects);
         Self {
             inner: Mutex::new(Inner {
                 registry,
-                registry_load_error,
+                registry_blocked,
                 active_project_id,
                 trend_window: DEFAULT_TREND_WINDOW.to_string(),
                 fingerprints: HashMap::new(),
@@ -98,17 +104,23 @@ impl AppState {
         self.inner.lock().await.registry.clone()
     }
 
-    /// Return the registry only when startup loaded it successfully.
+    /// Return the registry only when it is safe to modify.
     ///
-    /// Keeping the startup error in state prevents a newer registry schema from
-    /// being replaced with an empty current-version file by a later rescan.
+    /// Blocks when the on-disk file was written by a future, incompatible version
+    /// of the app — overwriting it would silently drop unknown fields and corrupt
+    /// the user's data.  Ordinary parse or IO errors at startup do NOT block:
+    /// the in-memory default registry is returned so commands such as
+    /// `rescan_projects` and `add_project_manual` can restore the file.
     pub(crate) async fn registry_result(&self) -> AppResult<RegistryFile> {
         let inner = self.inner.lock().await;
-        match &inner.registry_load_error {
-            Some(message) => Err(AppError::Registry(format!(
-                "Die vorhandene Registrierungsdatei bleibt unveraendert: {message}"
-            ))),
-            None => Ok(inner.registry.clone()),
+        if inner.registry_blocked {
+            Err(AppError::Registry(
+                "Die Registry-Datei wurde von einer neueren App-Version geschrieben \
+                 und wird nicht ueberschrieben. Bitte auf die aktuelle App-Version aktualisieren."
+                    .to_string(),
+            ))
+        } else {
+            Ok(inner.registry.clone())
         }
     }
 
@@ -123,7 +135,7 @@ impl AppState {
             inner.active_project_id = preferred_project(&registry.projects);
         }
         inner.registry = registry;
-        inner.registry_load_error = None;
+        inner.registry_blocked = false;
     }
 
     /// Return the id of the project currently displayed, if any.

@@ -210,7 +210,7 @@ fn relation_summary(store: &AtlasStore) -> Option<(Vec<RelationSummaryEntry>, bo
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     let mut truncated = false;
-    for kind in GraphRelationKind::ALL {
+    'outer: for kind in GraphRelationKind::ALL {
         if !network_relation(kind) {
             continue;
         }
@@ -228,7 +228,7 @@ fn relation_summary(store: &AtlasStore) -> Option<(Vec<RelationSummaryEntry>, bo
             }
             if candidates.len() >= MAX_SUMMARY_CANDIDATES {
                 truncated = true;
-                break;
+                break 'outer;
             }
             candidates.push(entity);
         }

@@ -4479,6 +4479,19 @@ impl AtlasStore {
     /// can therefore answer a goal such as `tests` without materializing every
     /// indexed node or accidentally matching a similarly named source file.
     ///
+    /// ## Performance note
+    ///
+    /// ASCII queries use a single `SELECT EXISTS … LIKE` statement that stops at
+    /// the first match and is well-bounded regardless of database size.
+    ///
+    /// Non-ASCII queries cannot rely on SQLite's `LOWER()` / `LIKE` for Unicode
+    /// case folding, so they fall back to a Rust-side scan: all `purpose` rows are
+    /// fetched and checked with [`str::contains`] after [`str::to_lowercase`].
+    /// For projects with thousands of purpose rows this can be noticeably slower,
+    /// but it is still correct and bounded by the number of purposes in the
+    /// database.  A future optimization could cache the lowercased purposes or use
+    /// a dedicated full-text-search index.
+    ///
     /// # Errors
     ///
     /// Returns an error when the lookup cannot be prepared or read.
