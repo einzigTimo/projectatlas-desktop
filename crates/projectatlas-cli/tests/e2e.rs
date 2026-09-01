@@ -8641,14 +8641,14 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
     )?;
     let has_cargo_deny_policy = |content: &str| {
         content.contains("cargo deny --locked --all-features check -D warnings")
-            || (content.contains(
-                "cargo deny --locked --all-features --exclude projectatlas-desktop",
-            ) && content.contains("check -D warnings -A advisory-not-detected")
-                && content.contains(
-                    "cargo deny --locked --all-features --target x86_64-pc-windows-msvc",
-                )
+            || (content
+                .contains("cargo deny --locked --all-features --exclude projectatlas-desktop")
+                && content.contains("check -D warnings -A advisory-not-detected")
+                && content
+                    .contains("cargo deny --locked --all-features --target x86_64-pc-windows-msvc")
                 && content.contains("check advisories licenses sources -D warnings")
-                && content.contains("check bans -A duplicate -A unused-workspace-dependency -D warnings"))
+                && content
+                    .contains("check bans -A duplicate -A unused-workspace-dependency -D warnings"))
     };
 
     if !mermaid_package.contains(r#""jsdom": "27.4.0""#)
@@ -8778,10 +8778,9 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         }
     }
     if !has_cargo_deny_policy(&ci) {
-        return Err(io::Error::other(
-            "ordinary CI is missing blocking cargo-deny policy gate",
-        )
-        .into());
+        return Err(
+            io::Error::other("ordinary CI is missing blocking cargo-deny policy gate").into(),
+        );
     }
     for required in [
         "cargo fmt --all --check",
