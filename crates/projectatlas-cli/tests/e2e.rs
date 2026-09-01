@@ -6685,10 +6685,8 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
             }
         }
     }
-    let readme_install_legacy =
-        "codex plugin add projectatlas --marketplace projectatlas";
-    let readme_install_alt =
-        "codex plugin marketplace add projectatlas --marketplace projectatlas";
+    let readme_install_legacy = "codex plugin add projectatlas --marketplace projectatlas";
+    let readme_install_alt = "codex plugin marketplace add projectatlas --marketplace projectatlas";
     if !readme.contains(readme_install_legacy) && !readme.contains(readme_install_alt) {
         return Err(io::Error::other(
             "README must keep concise install guidance and link its detailed owner",
@@ -8803,12 +8801,12 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         }
     }
     let issue_map_gate = "python3 .github/scripts/issue-checklists.py --self-test";
-    let issue_map_gate_with_map =
-        "python3 .github/scripts/issue-checklists.py --self-test --issue-map openspec/issue-map.json";
+    let issue_map_gate_with_map = "python3 .github/scripts/issue-checklists.py --self-test --issue-map openspec/issue-map.json";
     if !ci.contains(issue_map_gate) && !ci.contains(issue_map_gate_with_map) {
-        return Err(
-            io::Error::other("ordinary CI is missing blocking gate issue-checklists self-test").into(),
-        );
+        return Err(io::Error::other(
+            "ordinary CI is missing blocking gate issue-checklists self-test",
+        )
+        .into());
     }
     for (test, label) in [
         (
