@@ -39,5 +39,5 @@ tauri-build = { version = "2", features = [] }
 workspace = true
 
 [dev-dependencies]
-base64 = "0.22"
+base64.workspace = true
 minisign-verify = "0.2"

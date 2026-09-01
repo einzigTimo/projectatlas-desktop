@@ -1708,6 +1708,19 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 &config_path,
                 false,
             );
+            // The project-root `.mcp.json` is generated after the bootstrap scan. Refresh
+            // once so the freshly initialized index is immediately consistent for reads.
+            if !*no_scan && report.ok {
+                let symbol_options = SymbolBuildOptions::new(MAX_SYMBOL_FILE_BYTES, None, None);
+                let plan = ScanRuntimePlan::for_path_controlled(
+                    Some(&config_path),
+                    &root,
+                    *text_index_max_bytes,
+                    &index_work_control(&symbol_options),
+                )?;
+                let mut store = open_atlas_store_for_project(&db_path, &root)?;
+                runtime::run_single_watch_refresh(&mut store, &plan, &symbol_options)?;
+            }
             print_output(
                 cli.format,
                 &encode_agent_payload(&json!({ "init": report })),

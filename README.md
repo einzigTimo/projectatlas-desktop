@@ -6,6 +6,22 @@ Source code of **ProjectAtlas Desktop** — a Windows companion app for
 agents read exactly the right places instead of searching broadly, saving a
 lot of tokens and time.
 
+ProjectAtlas is Rust-native, high-performance local repository intelligence: a persistent SQLite map,
+a native Rust CLI and MCP server, with purposes that identify the responsible area, graph relationships
+that reveal connected code, compact summaries and outlines, and exact source slices that provide the final evidence.
+purposes identify the responsible area; graph relationships reveal connected code; exact source slices provide the final evidence.
+
+![Atlas mascot](docs/design/ani-mascot-reference.png)
+Weitere technische Einstiege: [Runtime installation and repair](docs/agent-integration.md#runtime-installation-and-repair),
+[Token reporting and human TUI](docs/agent-integration.md#token-reporting-and-human-tui),
+[MCP tool sequence](docs/agent-integration.md#mcp-tool-sequence).
+
+Every file not opened. Every folder not explored. ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph, reducing token costs by over 90%.
+
+The "over 90%" figure is a workload-specific local estimate from the published audit, not a universal savings guarantee or provider-billing result; see [One Large-Application Audit](#one-large-application-audit).
+
+Human-readable token view: `projectatlas token --view tui` (see `docs/assets/token-impact-tui.png`).
+
 The desktop app shows how many tokens ProjectAtlas has saved in your local
 projects — what, when, where, and by what means — and connects projects to
 the AI tools Claude Code, Codex, and OpenCode at the click of a button.
@@ -27,6 +43,12 @@ Finished installers and update manifests live in
 
 Für die Weitergabe an Kolleg:innen gilt die kurze
 [Windows-Installations- und Ersteinrichtungsanleitung](docs/kolleginnen-installation.md).
+Die veröffentlichte Referenz ist an den Release-Tag `releases/tag/v0.4.5-rc3` gebunden.
+Die RC-Ausgabe liegt unter `docs/v0.4.5-rc3-release-notes.md`, wird als prerelease veröffentlicht
+und ersetzt nicht den vorherigen stabilen GitHub-Latest-Release.
+The candidate is published as a prerelease and does not replace the preceding stable GitHub Latest release.
+Für task-orientierten Agentenstart wird einmalig `atlas_session_brief` mit `compact: true` aufgerufen;
+danach folgt direkt der typisierte nächste Aufruf.
 Nur eine produktiv freigegebene, Windows-Authenticode-signierte Ausgabe ist dafür vorgesehen;
 ein lokaler Probebau ist kein verteilbarer Installer.
 

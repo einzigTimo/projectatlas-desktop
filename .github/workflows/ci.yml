@@ -104,6 +104,7 @@ jobs:
 
       - name: Dependency policy
         run: |
+          # cargo deny --locked --all-features check -D warnings
           cargo deny --locked --all-features --exclude projectatlas-desktop \
             check -D warnings -A advisory-not-detected
           cargo deny --locked --all-features --target x86_64-pc-windows-msvc \
