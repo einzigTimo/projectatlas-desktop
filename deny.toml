@@ -61,7 +61,7 @@ duplicates = "deny"
 include-path-dependencies = true
 # Workspace-level dependencies may be reserved for platform-specific builds
 # (for example the Tauri desktop crate) and are validated by the build itself.
-unused = "allow"
+unused = "deny"
 
 [sources]
 unknown-registry = "deny"
