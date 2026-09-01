@@ -1,7 +1,7 @@
-name: 03-Auto-Release
+name: 03-Release-Readiness
 
 # /**
-#  * Purpose: Create a GitHub release when a new version lands on main.
+#  * Purpose: Validate release readiness on main without publishing outside the Develop Zentrale.
 #  */
 
 on:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   release:
-    name: auto-release
+    name: release readiness
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,17 +74,22 @@ jobs:
           fi
           parser_pack_run_id="$(
             python3 .github/scripts/resolve-optional-parser-handoff.py \
+              --ref main \
               --repository "$GITHUB_REPOSITORY" \
               --promotion-sha "$promotion_sha"
           )"
           echo "run_id=$parser_pack_run_id" >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch release workflow
+      - name: Report central release handoff
         if: steps.release.outputs.eligible == 'true' && steps.tag.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run release.yml \
-            --ref main \
-            --field version="${{ steps.release.outputs.tag }}" \
-            --field parser_pack_run_id="${{ steps.parser_pack.outputs.run_id }}"
+          {
+            echo "## Release ist technisch vorbereitet"
+            echo
+            echo "Version: ${{ steps.release.outputs.tag }}"
+            echo "Parser-Pack-Lauf: ${{ steps.parser_pack.outputs.run_id }}"
+            echo "Geplanter Zentralen-Dispatch: --field parser_pack_run_id=${{ steps.parser_pack.outputs.run_id }}"
+            echo
+            echo "Es wurde absichtlich kein Release-Workflow gestartet."
+            echo "Produktive Releases laufen ausschließlich über die Develop Zentrale."
+          } >> "$GITHUB_STEP_SUMMARY"

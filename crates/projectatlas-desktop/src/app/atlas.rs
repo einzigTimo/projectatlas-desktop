@@ -11,11 +11,13 @@
 //! unavailable and the panel says so, exactly like the terminal version does.
 
 use crate::app::error::AppResult;
-use projectatlas_core::graph::{EntitySelector, GraphRelationKind};
+use projectatlas_core::graph::{
+    EntitySelector, GraphEntity, GraphRelationKind, RepositoryNodePath,
+};
 use projectatlas_core::symbols::RelationKind;
-use projectatlas_db::{AtlasStore, RepositoryGraphRelationQuery};
+use projectatlas_db::{AtlasStore, RepositoryGraphDirection, RepositoryGraphRelationQuery};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// Strongest endpoints requested per relation family.
@@ -30,6 +32,16 @@ const MAX_NODES: usize = 42;
 const MAX_EDGES: usize = 64;
 /// Longest node label forwarded to the frontend.
 const MAX_LABEL: usize = 28;
+/// Ranked endpoints requested per relation family for the file summary.
+const SUMMARY_HUBS_PER_FAMILY: u32 = 8;
+/// Unique file candidates considered for the incoming-relation summary.
+const MAX_SUMMARY_CANDIDATES: usize = 24;
+/// Incoming relations counted per summary candidate.
+const SUMMARY_RELATIONS_PER_FILE: u32 = 128;
+/// Files shown in the compact relation summary.
+const MAX_RELATION_SUMMARY: usize = 5;
+/// Direct neighbours returned for one explicit drill-down direction.
+const DRILLDOWN_RELATIONS_PER_DIRECTION: u32 = 40;
 
 /// One node of the relationship preview.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -43,6 +55,10 @@ pub(crate) struct AtlasNode {
     pub(crate) cluster: usize,
     /// Whether this node is one of the strongest endpoints.
     pub(crate) hub: bool,
+    /// Repository path when the entity is backed by a local file or folder.
+    pub(crate) path: Option<String>,
+    /// Stable entity-kind label used by the detail panel.
+    pub(crate) entity_kind: String,
 }
 
 /// One resolved relation between two preview nodes.
@@ -53,6 +69,52 @@ pub(crate) struct AtlasEdge {
     pub(crate) source: String,
     /// Compact identity of the target node.
     pub(crate) target: String,
+    /// Stable typed relation family such as `extended:documents`.
+    pub(crate) relation: String,
+}
+
+/// One high-value file ranked by its incoming repository relations.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RelationSummaryEntry {
+    /// Repository-relative file path.
+    pub(crate) path: String,
+    /// Compact display label.
+    pub(crate) label: String,
+    /// Number of retained incoming relations in the bounded read.
+    pub(crate) incoming: usize,
+    /// Stable relation families observed for the incoming rows.
+    pub(crate) relation_kinds: Vec<String>,
+}
+
+/// One direct neighbour in a file relation drill-down.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileRelationEntry {
+    /// Direction relative to the selected file: `incoming` or `outgoing`.
+    pub(crate) direction: String,
+    /// Stable typed relation family.
+    pub(crate) relation: String,
+    /// Compact neighbour label.
+    pub(crate) label: String,
+    /// Repository path when the neighbour is local and path-backed.
+    pub(crate) path: Option<String>,
+    /// Stable entity-kind label.
+    pub(crate) entity_kind: String,
+}
+
+/// Direct incoming and outgoing relations for one selected file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileRelationsView {
+    /// Normalized repository-relative selected path.
+    pub(crate) path: String,
+    /// Direct incoming neighbours.
+    pub(crate) incoming: Vec<FileRelationEntry>,
+    /// Direct outgoing neighbours.
+    pub(crate) outgoing: Vec<FileRelationEntry>,
+    /// Whether a query ceiling omitted further relations.
+    pub(crate) truncated: bool,
 }
 
 /// The bounded relationship preview, or an explicit unavailable state.
@@ -67,6 +129,8 @@ pub(crate) struct AtlasView {
     pub(crate) nodes: Vec<AtlasNode>,
     /// Preview edges.
     pub(crate) edges: Vec<AtlasEdge>,
+    /// Top local files by bounded incoming relation count.
+    pub(crate) relation_summary: Vec<RelationSummaryEntry>,
 }
 
 impl AtlasView {
@@ -77,6 +141,7 @@ impl AtlasView {
             truncated: false,
             nodes: Vec::new(),
             edges: Vec::new(),
+            relation_summary: Vec::new(),
         }
     }
 }
@@ -117,6 +182,107 @@ fn label(selector: &EntitySelector) -> String {
     shorten(&raw)
 }
 
+/// Return a stable entity-kind label for the frontend.
+const fn entity_kind(selector: &EntitySelector) -> &'static str {
+    match selector {
+        EntitySelector::Project => "project",
+        EntitySelector::Folder { .. } => "folder",
+        EntitySelector::File { .. } => "file",
+        EntitySelector::Package { .. } => "package",
+        EntitySelector::Symbol { .. } => "symbol",
+        EntitySelector::External { .. } => "external",
+    }
+}
+
+/// Return the repository path carried by a local path-backed selector.
+fn selector_path(selector: &EntitySelector) -> Option<String> {
+    match selector {
+        EntitySelector::Folder { path } => Some(path.as_str().to_string()),
+        EntitySelector::File { path } => Some(path.as_str().to_string()),
+        EntitySelector::Package { package } => Some(package.manifest.as_str().to_string()),
+        EntitySelector::Symbol { symbol } => Some(symbol.file.as_str().to_string()),
+        EntitySelector::Project | EntitySelector::External { .. } => None,
+    }
+}
+
+/// Build the compact top-file relation summary through bounded graph queries.
+fn relation_summary(store: &AtlasStore) -> Option<(Vec<RelationSummaryEntry>, bool)> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    let mut truncated = false;
+    'outer: for kind in GraphRelationKind::ALL {
+        if !network_relation(kind) {
+            continue;
+        }
+        let page = store
+            .repository_graph_resolved_relation_hubs(kind, SUMMARY_HUBS_PER_FAMILY, None)
+            .ok()?;
+        truncated |= page.truncated;
+        for entity in page.rows {
+            if !matches!(entity.selector(), EntitySelector::File { .. }) {
+                continue;
+            }
+            let digest = entity.key().digest().to_string();
+            if !seen.insert(digest) {
+                continue;
+            }
+            if candidates.len() >= MAX_SUMMARY_CANDIDATES {
+                truncated = true;
+                break 'outer;
+            }
+            candidates.push(entity);
+        }
+    }
+
+    let mut entries = Vec::new();
+    for entity in candidates {
+        let page = store
+            .repository_graph_relation_rows(
+                RepositoryGraphRelationQuery::Inbound {
+                    target: entity.key().clone(),
+                },
+                SUMMARY_RELATIONS_PER_FILE,
+                None,
+            )
+            .ok()?;
+        truncated |= page.truncated;
+        let rows = page
+            .rows
+            .iter()
+            .filter(|row| network_relation(row.relation.kind()))
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+        let relation_kinds = rows
+            .iter()
+            .map(|row| row.relation.kind().as_str().to_string())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let Some(path) = selector_path(entity.selector()) else {
+            continue;
+        };
+        entries.push(RelationSummaryEntry {
+            label: label(entity.selector()),
+            path,
+            incoming: rows.len(),
+            relation_kinds,
+        });
+    }
+    entries.sort_by(|left, right| {
+        right
+            .incoming
+            .cmp(&left.incoming)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    if entries.len() > MAX_RELATION_SUMMARY {
+        entries.truncate(MAX_RELATION_SUMMARY);
+        truncated = true;
+    }
+    Some((entries, truncated))
+}
+
 /// Collect the strongest endpoints across every network relation family.
 fn collect_hubs(store: &AtlasStore) -> Option<(Vec<projectatlas_core::graph::GraphEntity>, bool)> {
     let mut hubs = Vec::new();
@@ -154,12 +320,16 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
     let Some((hubs, mut truncated)) = collect_hubs(&store) else {
         return Ok(AtlasView::unavailable());
     };
+    let (relation_summary, summary_truncated) =
+        relation_summary(&store).unwrap_or_else(|| (Vec::new(), true));
+    truncated |= summary_truncated;
     if hubs.is_empty() {
         return Ok(AtlasView {
             available: true,
             truncated,
             nodes: Vec::new(),
             edges: Vec::new(),
+            relation_summary,
         });
     }
 
@@ -176,6 +346,8 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
                 label: label(hub.selector()),
                 cluster,
                 hub: true,
+                path: selector_path(hub.selector()),
+                entity_kind: entity_kind(hub.selector()).to_string(),
             });
         }
 
@@ -192,6 +364,10 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
         truncated |= page.truncated;
 
         for row in page.rows {
+            if !network_relation(row.relation.kind()) {
+                continue;
+            }
+            let relation = row.relation.kind().as_str().to_string();
             let Some(target) = row.target else {
                 continue;
             };
@@ -210,16 +386,19 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
                     label: label(target.selector()),
                     cluster,
                     hub: false,
+                    path: selector_path(target.selector()),
+                    entity_kind: entity_kind(target.selector()).to_string(),
                 });
             }
             if edges.len() >= MAX_EDGES {
                 truncated = true;
                 break;
             }
-            if edge_keys.insert(format!("{hub_id}>{target_id}")) {
+            if edge_keys.insert(format!("{hub_id}>{target_id}:{relation}")) {
                 edges.push(AtlasEdge {
                     source: hub_id.clone(),
                     target: target_id,
+                    relation,
                 });
             }
         }
@@ -230,5 +409,160 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
         truncated,
         nodes,
         edges,
+        relation_summary,
     })
+}
+
+/// Return a direct bounded relation drill-down for one repository file.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened, the path is invalid,
+/// or a graph query fails. A valid file without a published graph entity yields
+/// an empty view.
+pub(crate) fn file_relations(
+    db_path: &Path,
+    root: &Path,
+    file_path: &str,
+) -> AppResult<FileRelationsView> {
+    let store = AtlasStore::open_read_only_for_project(db_path, root)?;
+    let normalized = RepositoryNodePath::new(Path::new(file_path)).map_err(|error| {
+        crate::app::error::AppError::Registry(format!(
+            "Ungueltiger Repository-Pfad {file_path}: {error}"
+        ))
+    })?;
+    let mut view = FileRelationsView {
+        path: normalized.as_str().to_string(),
+        incoming: Vec::new(),
+        outgoing: Vec::new(),
+        truncated: false,
+    };
+    let Some(project) = store.project_instance_id()? else {
+        return Ok(view);
+    };
+    let entities = store.repository_graph_entities_by_path(project, &normalized, 16)?;
+    let Some(file) = entities
+        .rows
+        .into_iter()
+        .find(|entity| matches!(entity.selector(), EntitySelector::File { .. }))
+    else {
+        return Ok(view);
+    };
+
+    let (incoming, incoming_truncated) = resolved_file_relations(
+        &store,
+        file.key(),
+        RepositoryGraphDirection::Inbound,
+        "incoming",
+    )?;
+    let (outgoing, outgoing_truncated) = resolved_file_relations(
+        &store,
+        file.key(),
+        RepositoryGraphDirection::Outbound,
+        "outgoing",
+    )?;
+    view.incoming = incoming;
+    view.outgoing = outgoing;
+    view.truncated = incoming_truncated || outgoing_truncated;
+    Ok(view)
+}
+
+/// Read direct local neighbours without letting unresolved rows consume the
+/// public drill-down limit. The database applies its resolution filter before
+/// each bounded family page; the merged frontend result is capped afterwards.
+fn resolved_file_relations(
+    store: &AtlasStore,
+    file: &projectatlas_core::graph::GraphEntityKey,
+    direction: RepositoryGraphDirection,
+    direction_label: &str,
+) -> AppResult<(Vec<FileRelationEntry>, bool)> {
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    let mut truncated = false;
+
+    for relation in GraphRelationKind::ALL {
+        if !network_relation(relation) {
+            continue;
+        }
+        let page = store.repository_graph_resolved_adjacency_page(
+            std::slice::from_ref(file),
+            direction,
+            relation,
+            None,
+            DRILLDOWN_RELATIONS_PER_DIRECTION,
+            None,
+        )?;
+        truncated |= page.truncated;
+        for row in page.rows {
+            let neighbour = match direction {
+                RepositoryGraphDirection::Inbound => Some(&row.detail.source),
+                RepositoryGraphDirection::Outbound => row.detail.target.as_ref(),
+            };
+            let Some(neighbour) = neighbour else {
+                continue;
+            };
+            let key = (relation.as_str(), neighbour.key().digest().to_string());
+            if seen.insert(key) {
+                entries.push(relation_entry(direction_label, relation, neighbour));
+            }
+        }
+    }
+
+    if entries.len() > DRILLDOWN_RELATIONS_PER_DIRECTION as usize {
+        entries.truncate(DRILLDOWN_RELATIONS_PER_DIRECTION as usize);
+        truncated = true;
+    }
+    Ok((entries, truncated))
+}
+
+/// Project one hydrated graph neighbour onto the frontend contract.
+fn relation_entry(
+    direction: &str,
+    relation: GraphRelationKind,
+    neighbour: &GraphEntity,
+) -> FileRelationEntry {
+    FileRelationEntry {
+        direction: direction.to_string(),
+        relation: relation.as_str().to_string(),
+        label: label(neighbour.selector()),
+        path: selector_path(neighbour.selector()),
+        entity_kind: entity_kind(neighbour.selector()).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_labels_keep_the_identifying_tail() {
+        let shortened = shorten("a/very/long/path/whose/tail/is/important.rs");
+        assert!(shortened.starts_with('…'));
+        assert!(shortened.ends_with("important.rs"));
+        assert_eq!(shortened.chars().count(), MAX_LABEL);
+    }
+
+    #[test]
+    fn relation_view_serializes_stable_frontend_field_names() -> Result<(), serde_json::Error> {
+        let value = serde_json::to_value(FileRelationsView {
+            path: "docs/guide.md".to_string(),
+            incoming: vec![FileRelationEntry {
+                direction: "incoming".to_string(),
+                relation: "extended:documents".to_string(),
+                label: "lib.rs".to_string(),
+                path: Some("src/lib.rs".to_string()),
+                entity_kind: "file".to_string(),
+            }],
+            outgoing: Vec::new(),
+            truncated: false,
+        })?;
+        if value["incoming"][0]["entityKind"] != "file"
+            || value["incoming"][0]["relation"] != "extended:documents"
+        {
+            return Err(serde_json::Error::io(std::io::Error::other(
+                "serialized relation contract changed",
+            )));
+        }
+        Ok(())
+    }
 }

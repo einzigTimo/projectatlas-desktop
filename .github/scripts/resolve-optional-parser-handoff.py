@@ -132,9 +132,12 @@ def select_reusable_run(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ref", default="main")
     parser.add_argument("--repository", required=True)
     parser.add_argument("--promotion-sha", required=True)
     args = parser.parse_args()
+    if args.ref != "main":
+        raise RuntimeError("optional parser handoff requires release target main")
     run_id = select_reusable_run(
         workflow_run_pages(args.repository, run_command),
         args.promotion_sha,
