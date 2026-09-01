@@ -9,7 +9,6 @@ lot of tokens and time.
 ProjectAtlas is Rust-native, high-performance local repository intelligence: a persistent SQLite map,
 a native Rust CLI and MCP server, with purposes that identify the responsible area, graph relationships
 that reveal connected code, compact summaries and outlines, and exact source slices that provide the final evidence.
-purposes identify the responsible area; graph relationships reveal connected code; exact source slices provide the final evidence.
 
 ![Atlas mascot](docs/design/ani-mascot-reference.png)
 Weitere technische Einstiege: [Runtime installation and repair](docs/agent-integration.md#runtime-installation-and-repair),

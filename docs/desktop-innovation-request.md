@@ -1,12 +1,12 @@
 # ProjectAtlas Desktop – Innovation-Übernahme-Request
 
-Closes #10
+Bezug: #10
 
 ## Status
 
 Als priorisierter Request dokumentiert und im Desktop-Branch technisch umgesetzt. Die Punkte können
 weiterhin getrennt reviewed oder in Sub-Issues nachverfolgt werden.
-Die Abschnitte „Was fehlt" beschreiben dabei den Ausgangsstand auf `main`, gegen den die Umsetzung
+Die Abschnitte „Was fehlt“ beschreiben dabei den Ausgangsstand auf `main`, gegen den die Umsetzung
 geprüft wird.
 
 ## Fachliche Präzisierung
@@ -95,7 +95,7 @@ Relationstyp, Richtung und vollständigen Pfad. Ein Datei-Drill-down zwischen Co
 **Vorgeschlagene Erweiterung:**
 1. `AtlasView` um einen `RelationSummary`-Block erweitern (Top-5 Dateien mit den meisten eingehenden
    Relationen, geladen aus dem `repository_graph`-Modul des `projectatlas-db`-Crates).
-2. Im Frontend eine neue „Relations"-Sektion im Detailbereich ergänzen, die den Graphen als
+2. Im Frontend eine neue „Relations“-Sektion im Detailbereich ergänzen, die den Graphen als
    kompakte Liste darstellt.
 3. Klickziel für einen Relation-Drill-Down anlegen, der per Tauri-Kommando die direkten Nachbarn
    einer Datei zurückgibt.
@@ -122,7 +122,7 @@ präzisen Dokument-Punkt.
 1. Im `query`-Modul eine begrenzte Heading-Abfrage ergänzen, die bereits indizierte
    `SymbolKind::Heading`-Einträge samt stabiler Signatur aus dem Store zurückgibt. Kein zweiter
    Markdown-Parser im Desktop.
-2. Im Frontend einen „Abschnitt"-Picker (Dropdown) neben relevanten Dokument-Links anzeigen.
+2. Im Frontend einen „Abschnitt“-Picker (Dropdown) neben relevanten Dokument-Links anzeigen.
 3. Den Clipboard-Copy-Button so erweitern, dass er wahlweise `<datei>#<heading>` als Selektor kopiert,
    bereit zum Einfügen in ein Agent-Prompt oder ein MCP-Tool-Argument.
 
@@ -137,7 +137,7 @@ Ergänzt P3: erst Relationen, dann präzise Sprungziele innerhalb von Dokumenten
 `styler-ai/ProjectAtlas` leitet Agenten über `atlas_session_brief` und `atlas_folders` zu den
 Purpose-relevantesten Ordnern, bevor ein Vollscan gestartet wird. Dieses Routing-Modell lässt sich auf
 die Desktop-Oberfläche übertragen: Nutzer und Agenten sollen Projekte über freie Ziele wie
-„Deployment vorbereiten" oder „Registry stabil migrieren" eingrenzen können.
+„Deployment vorbereiten“ oder „Registry stabil migrieren“ eingrenzen können.
 
 **Was in der Desktop-App fehlt:**
 Es gibt keine Purpose-Filterung in der Sidebar oder in der Atlas-Map. Alle Projekte werden gleichrangig

@@ -132,7 +132,8 @@ pub(crate) struct PeriodView {
     pub(crate) saved: isize,
     /// Signed savings ratio, or `None` when the baseline estimate is zero.
     pub(crate) savings_rate: Option<f64>,
-    /// Attribution rows for this period, capped at [`MAX_BUCKETS`].
+    /// Attribution rows for this period, capped at [`MAX_BUCKETS`]; trend payloads are
+    /// additionally bounded by [`MAX_TREND_BUCKET_ROWS`] across the newest periods.
     pub(crate) buckets: Vec<BucketView>,
 }
 

@@ -357,21 +357,7 @@ pub(crate) async fn calibrate_project(
 
 // ── P4 – Heading selectors ────────────────────────────────────────────────────
 
-/// One Markdown heading extracted from an indexed file.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct HeadingEntry {
-    /// Heading level (1–6).
-    pub(crate) level: u8,
-    /// Heading text as it appears in the source.
-    pub(crate) text: String,
-    /// URL-safe anchor slug that can be appended as `#<anchor>` to a file path.
-    pub(crate) anchor: String,
-    /// Ready-to-copy repository-relative `<file>#<anchor>` selector.
-    pub(crate) selector: String,
-    /// One-based source line on which the heading begins.
-    pub(crate) line: usize,
-}
+pub(crate) use crate::app::query::HeadingEntry;
 
 /// Extract all Markdown headings from one indexed file.
 ///
@@ -405,7 +391,8 @@ pub(crate) async fn get_file_headings(
 ///
 /// # Errors
 ///
-/// Never fails as a whole: a project whose database cannot be read is omitted.
+/// Returns an error when the registry cannot be loaded or the worker cannot be joined;
+/// individual projects whose database cannot be read are omitted (best effort).
 #[tauri::command]
 pub(crate) async fn list_projects_by_purpose(
     state: State<'_, AppState>,
@@ -421,7 +408,7 @@ pub(crate) async fn list_projects_by_purpose(
         Ok(candidates
             .iter()
             .filter(|project| {
-                matches!(project.status, ProjectStatus::Ok)
+                matches!(&project.status, ProjectStatus::Ok)
                     && query::project_matches_purpose(
                         &project.db_path,
                         &project.root,

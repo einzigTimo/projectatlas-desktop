@@ -12,7 +12,19 @@ use projectatlas_core::symbols::{CodeSymbol, SymbolKind};
 use projectatlas_core::telemetry::TokenCalibrationOverview;
 use projectatlas_db::AtlasStore;
 use projectatlas_service::{TokenReport, TokenReportRequest, load_token_report};
+use serde::Serialize;
 use std::path::Path;
+
+/// One Markdown heading extracted from an indexed file.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeadingEntry {
+    pub(crate) level: u8,
+    pub(crate) text: String,
+    pub(crate) anchor: String,
+    pub(crate) selector: String,
+    pub(crate) line: usize,
+}
 
 /// Open one project's database for bounded read-only queries.
 fn open(db_path: &Path, root: &Path) -> AppResult<AtlasStore> {
@@ -137,7 +149,7 @@ pub(crate) fn file_headings(
     db_path: &Path,
     root: &Path,
     file_path: &str,
-) -> AppResult<Vec<crate::app::commands::HeadingEntry>> {
+) -> AppResult<Vec<HeadingEntry>> {
     // Only process Markdown files.
     let markdown_extension = Path::new(file_path)
         .extension()
@@ -166,10 +178,10 @@ pub(crate) fn file_headings(
 }
 
 /// Project one persisted heading symbol onto the desktop selector shape.
-fn heading_entry(file_path: &str, symbol: CodeSymbol) -> crate::app::commands::HeadingEntry {
+fn heading_entry(file_path: &str, symbol: CodeSymbol) -> HeadingEntry {
     let normalized_path = file_path.replace('\\', "/");
     let anchor = symbol.signature;
-    crate::app::commands::HeadingEntry {
+    HeadingEntry {
         level: heading_level(symbol.detail.as_deref()),
         text: symbol.name,
         selector: format!("{normalized_path}#{anchor}"),
