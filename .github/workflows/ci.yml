@@ -48,7 +48,7 @@ jobs:
           tool: cargo-deny@0.20.2
 
       - name: Issue reference check
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'dev')
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
