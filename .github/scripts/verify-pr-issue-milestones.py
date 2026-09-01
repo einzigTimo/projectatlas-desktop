@@ -99,25 +99,25 @@ def verify_pull_request(repo: str, number: int) -> list[str]:
 def self_test() -> None:
     references = issue_references(
         "Follow-up for #12, GH-7, and octo/example#9. Duplicate #12 is ignored.",
-        "einzigTimo/projectatlas-desktop",
+        "test-owner/test-repo",
     )
     assert references == [
-        ("einzigTimo/projectatlas-desktop", 7),
-        ("einzigTimo/projectatlas-desktop", 12),
         ("octo/example", 9),
+        ("test-owner/test-repo", 7),
+        ("test-owner/test-repo", 12),
     ]
 
-    failures = verify_references("einzigTimo/projectatlas-desktop", [])
+    failures = verify_references("test-owner/test-repo", [])
     assert failures == ["Pull request title or body must reference a GitHub issue."]
 
     fake_issues = {
-        ("einzigTimo/projectatlas-desktop", 11): {"milestone": {"title": "Version 0.2.3"}},
+        ("test-owner/test-repo", 11): {"milestone": {"title": "Version 0.2.3"}},
         ("octo/example", 9): {"milestone": None},
     }
     failures = verify_references(
-        "einzigTimo/projectatlas-desktop",
+        "test-owner/test-repo",
         [
-            ("einzigTimo/projectatlas-desktop", 11),
+            ("test-owner/test-repo", 11),
             ("octo/example", 9),
         ],
         issue_fetcher=lambda repo, number: fake_issues[(repo, number)],
