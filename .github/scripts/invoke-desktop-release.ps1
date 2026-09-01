@@ -46,8 +46,9 @@
 
 .NOTES
     Der Produktivmodus ist kein manueller Einstiegspunkt. Die Develop Zentrale uebergibt das
-    frische, commitgebundene Preflight-Artefakt und stellt TAURI_SIGNING_PRIVATE_KEY sowie ein
-    angemeldetes gh bereit. Geheimnisse nie auf der Befehlszeile uebergeben oder committen.
+    frische, commitgebundene Preflight-Artefakt und stellt einen Tauri-Signierschluessel sowie ein
+    angemeldetes gh bereit. Geheimnisse nie auf der Befehlszeile uebergeben oder committen. Neben
+    TAURI_SIGNING_PRIVATE_KEY wird der geschuetzte lokale Standardpfad unter .tauri unterstuetzt.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
 param(
@@ -517,10 +518,38 @@ $cargoPath = Assert-Tool -Name "cargo" -Hint "Rust-Toolchain installieren (rustu
 Invoke-Native -FilePath $cargoPath -Arguments @("tauri", "--version")
 
 $signingKey = [System.Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY")
-$hasSigningKey = -not [string]::IsNullOrWhiteSpace($signingKey)
+$signingKeyPath = [System.Environment]::GetEnvironmentVariable("TAURI_SIGNING_PRIVATE_KEY_PATH")
+$defaultSigningKeyPath = Join-Path $env:USERPROFILE ".tauri\projectatlas-desktop.key"
+if (
+    [string]::IsNullOrWhiteSpace($signingKey) -and
+    [string]::IsNullOrWhiteSpace($signingKeyPath) -and
+    (Test-Path -LiteralPath $defaultSigningKeyPath -PathType Leaf)
+) {
+    $signingKeyPath = $defaultSigningKeyPath
+    $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $defaultSigningKeyPath
+}
+if (
+    -not [string]::IsNullOrWhiteSpace($signingKeyPath) -and
+    -not (Test-Path -LiteralPath $signingKeyPath -PathType Leaf)
+) {
+    throw "TAURI_SIGNING_PRIVATE_KEY_PATH verweist nicht auf eine vorhandene Datei."
+}
+if ([string]::IsNullOrWhiteSpace($signingKey) -and -not [string]::IsNullOrWhiteSpace($signingKeyPath)) {
+    $signingKey = (Get-Content -LiteralPath $signingKeyPath -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($signingKey)) {
+        throw "Die Datei aus TAURI_SIGNING_PRIVATE_KEY_PATH enthaelt keinen Signierschluessel."
+    }
+    # Nur der kurzlebige Wrapper-Prozess und seine Build-Kinder erhalten den
+    # Schluessel. Weder Elternprozess noch Benutzer-/Maschinenumgebung werden
+    # veraendert, und der Wert wird nicht ausgegeben.
+    $env:TAURI_SIGNING_PRIVATE_KEY = $signingKey
+}
+$hasSigningKey =
+    -not [string]::IsNullOrWhiteSpace($signingKey) -or
+    -not [string]::IsNullOrWhiteSpace($signingKeyPath)
 if (-not $hasSigningKey) {
     if (-not $AllowUnsigned) {
-        throw "TAURI_SIGNING_PRIVATE_KEY ist nicht gesetzt. Schluessel aus dem Passwortmanager holen und in dieser Sitzung als Umgebungsvariable setzen, bevor das Skript laeuft — nie im Klartext an das Skript uebergeben oder committen. Nur zum Ausprobieren: -AllowUnsigned."
+        throw "Kein Tauri-Signierschluessel gefunden. TAURI_SIGNING_PRIVATE_KEY oder TAURI_SIGNING_PRIVATE_KEY_PATH sicher bereitstellen — nie im Klartext an das Skript uebergeben oder committen. Nur zum Ausprobieren: -AllowUnsigned."
     }
     Write-Warning "Ohne Update-Schluessel gebaut: die Bundles sind nicht signiert und der Auto-Updater lehnt sie ab."
 }
@@ -551,14 +580,27 @@ Write-Host "Signiert: $($hasSigningKey ? 'ja' : 'nein')"
 # Eingebettete Pfade neutralisieren: Rust schreibt absolute Quellpfade (samt
 # Windows-Benutzername) in Panik-Texte und Debug-Infos jedes Binaries. Ohne die
 # Remaps stuende der lokale Benutzerpfad in Sidecar UND Installer.
-# Reihenfolge ist tragend: rustc laesst bei mehreren Treffern das LETZTE Flag
-# gewinnen. Stuende das Benutzerprofil zuletzt, hiesse der Repo-Pfad im Binary
-# "~\Projects\<Repo-Name>\..." - der Ordnername leckte weiter.
-$env:RUSTFLAGS = (@(
-        $env:RUSTFLAGS,
-        "--remap-path-prefix=$env:USERPROFILE=~",
-        "--remap-path-prefix=$repositoryRoot=atlas"
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join " "
+# CARGO_ENCODED_RUSTFLAGS trennt Argumente mit 0x1f. Das ist auf Windows
+# notwendig, weil ein normales RUSTFLAGS den Repository-Pfad an Leerzeichen
+# zerlegt. Reihenfolge ist tragend: rustc laesst bei mehreren Treffern das
+# LETZTE Flag gewinnen.
+$encodedRustFlagSeparator = [char]0x1f
+$encodedRustFlags = [System.Collections.Generic.List[string]]::new()
+$existingEncodedRustFlags = [System.Environment]::GetEnvironmentVariable("CARGO_ENCODED_RUSTFLAGS")
+if (-not [string]::IsNullOrWhiteSpace($existingEncodedRustFlags)) {
+    foreach ($flag in $existingEncodedRustFlags.Split($encodedRustFlagSeparator)) {
+        if (-not [string]::IsNullOrWhiteSpace($flag)) {
+            $encodedRustFlags.Add($flag)
+        }
+    }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:RUSTFLAGS)) {
+    throw "RUSTFLAGS ist bereits gesetzt. Fuer den Release bitte argumentgetreue Flags ueber CARGO_ENCODED_RUSTFLAGS bereitstellen."
+}
+$encodedRustFlags.Add("--remap-path-prefix=$env:USERPROFILE=~")
+$encodedRustFlags.Add("--remap-path-prefix=$repositoryRoot=atlas")
+$env:CARGO_ENCODED_RUSTFLAGS = $encodedRustFlags -join $encodedRustFlagSeparator
+$env:RUSTFLAGS = $null
 
 if (-not $SkipSidecar) {
     Build-Sidecar -RepositoryRoot $repositoryRoot -CargoPath $cargoPath -DesktopCrateRoot $desktopCrateRoot
@@ -571,7 +613,7 @@ Write-Step "cargo tauri build"
 # Der Sidecar wird nur ueber diese Overlay-Konfiguration deklariert, nicht in
 # tauri.conf.json: waere bundle.externalBin dauerhaft gesetzt, braeche schon
 # `cargo check` ab, solange die Programmdatei fehlt - und damit der CI-Schritt.
-$buildArguments = @("tauri", "build")
+$buildArguments = @("tauri", "build", "--ci")
 if (-not $SkipSidecar) {
     $buildArguments += @("--config", "tauri.sidecar.conf.json")
 }
