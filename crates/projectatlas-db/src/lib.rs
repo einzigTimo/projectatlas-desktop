@@ -4472,6 +4472,60 @@ impl AtlasStore {
         Ok(nodes)
     }
 
+    /// Return whether any current node purpose contains the requested text.
+    ///
+    /// This is a purpose-only lookup: paths, summaries, symbols, and indexed
+    /// source text deliberately do not contribute. The desktop project router
+    /// can therefore answer a goal such as `tests` without materializing every
+    /// indexed node or accidentally matching a similarly named source file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lookup cannot be prepared or read.
+    pub fn has_purpose_text_match(&self, query: &str) -> DbResult<bool> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(false);
+        }
+        if !query.is_ascii() {
+            let needle = query.to_lowercase();
+            let mut statement = self.connection.prepare(
+                "
+                SELECT p.purpose
+                FROM nodes n
+                JOIN purposes p ON p.node_id = n.id
+                WHERE n.exists_now = 1
+                  AND p.purpose IS NOT NULL
+                ",
+            )?;
+            let purposes = statement.query_map([], |row| row.get::<_, String>(0))?;
+            for purpose in purposes {
+                if purpose?.to_lowercase().contains(&needle) {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        let pattern = format!("%{}%", sqlite_like_escape(&query.to_lowercase()));
+        self.connection
+            .query_row(
+                "
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM nodes n
+                    JOIN purposes p ON p.node_id = n.id
+                    WHERE n.exists_now = 1
+                      AND p.purpose IS NOT NULL
+                      AND LOWER(p.purpose) LIKE ?1 ESCAPE '\\'
+                    LIMIT 1
+                )
+                ",
+                [pattern],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )
+            .map_err(Into::into)
+    }
+
     /// Load a bounded ranked node list directly from `SQLite`.
     ///
     /// This is the hot path for agent orientation commands. It keeps large
@@ -8343,6 +8397,48 @@ mod tests {
             &store.load_node_by_path("src/missing.rs")?.is_none(),
             &true,
             "missing targeted path lookup",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn purpose_text_match_is_purpose_only_and_escapes_like_wildcards() -> Result<(), Box<dyn Error>>
+    {
+        let mut store = AtlasStore::in_memory()?;
+        store.replace_scan(&[
+            test_file_node("src/registry.rs", "hash-registry"),
+            test_file_node("src/purpose-router.rs", "hash-router"),
+        ])?;
+        store.set_purpose(
+            "src/registry.rs",
+            "Owns 100% atomic registry migrations and the Überprüfung flow.",
+            PurposeSource::Agent,
+        )?;
+
+        require_eq(
+            &store.has_purpose_text_match("ATOMIC REGISTRY")?,
+            &true,
+            "case-insensitive purpose match",
+        )?;
+        require_eq(
+            &store.has_purpose_text_match("100%")?,
+            &true,
+            "literal percent match",
+        )?;
+        require_eq(
+            &store.has_purpose_text_match("ÜBERPRÜFUNG")?,
+            &true,
+            "unicode case-insensitive purpose match",
+        )?;
+        require_eq(
+            &store.has_purpose_text_match("purpose-router")?,
+            &false,
+            "path text is excluded",
+        )?;
+        require_eq(
+            &store.has_purpose_text_match("   ")?,
+            &false,
+            "blank queries are excluded",
         )?;
         Ok(())
     }

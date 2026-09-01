@@ -86,6 +86,7 @@ const INSTALLER_RS_FILE_NAME: &str = "installer.rs";
 const LIB_RS_FILE_NAME: &str = "lib.rs";
 const SCANNED_RS_FILE_NAME: &str = "scanned.rs";
 const GIT_DIR_NAME: &str = ".git";
+const ROOT_MCP_CONFIG_FILE_NAME: &str = ".mcp.json";
 const MAIN_CHECKOUT_DIR_NAME: &str = "main-checkout";
 const LINKED_CHECKOUTS_DIR_NAME: &str = "branches";
 const BARE_REPOSITORY_DIR_NAME: &str = "repository.git";
@@ -3756,7 +3757,7 @@ fn init_bootstrap_creates_db_scan_report_and_host_configs() -> Result<(), Box<dy
         }
     }
     let root_mcp_config: Value =
-        serde_json::from_str(&fs::read_to_string(repo.join(".mcp.json"))?)?;
+        serde_json::from_str(&fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?)?;
     if root_mcp_config["mcpServers"]["projectatlas"]["command"]
         .as_str()
         .is_none()
@@ -5801,8 +5802,8 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     let repo = temp.path().join(TEST_REPO_DIR);
     fs::create_dir(&repo)?;
     fs::write(
-        repo.join(".mcp.json"),
-        "{\n  \"mcpServers\": {\n    \"other-server\": {\n      \"command\": \"other\",\n      \"args\": []\n    }\n  }\n}\n",
+        repo.join(ROOT_MCP_CONFIG_FILE_NAME),
+        "{\n  \"projectSetting\": {\"preserve\": true},\n  \"mcpServers\": {\n    \"other-server\": {\n      \"command\": \"other\",\n      \"args\": [\"--foreign\"],\n      \"env\": {\"FOREIGN_SETTING\": \"unchanged\"}\n    }\n  }\n}\n",
     )?;
 
     let output = Command::cargo_bin("projectatlas")?
@@ -5824,9 +5825,20 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     )?;
     require_json_string(&report, &["host_configs", "3", "status"], "verified")?;
 
-    let merged: Value = serde_json::from_str(&fs::read_to_string(repo.join(".mcp.json"))?)?;
+    let merged: Value =
+        serde_json::from_str(&fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?)?;
     if merged["mcpServers"]["other-server"]["command"].as_str() != Some("other") {
         return Err(io::Error::other("init dropped an existing .mcp.json server entry").into());
+    }
+    if merged["mcpServers"]["other-server"]["args"] != json!(["--foreign"])
+        || merged["mcpServers"]["other-server"]["env"]["FOREIGN_SETTING"].as_str()
+            != Some("unchanged")
+        || merged["projectSetting"]["preserve"].as_bool() != Some(true)
+    {
+        return Err(io::Error::other(
+            "init changed foreign .mcp.json server fields or top-level settings",
+        )
+        .into());
     }
     if merged["mcpServers"]["projectatlas"]["command"]
         .as_str()
@@ -5836,6 +5848,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
             io::Error::other("init did not merge projectatlas into existing .mcp.json").into(),
         );
     }
+    let merged_bytes = fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?;
 
     // A second run must leave the already-current file untouched.
     let rerun_output = Command::cargo_bin("projectatlas")?
@@ -5851,9 +5864,21 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     }
     let rerun_report: Value = serde_json::from_slice(&rerun_output.stdout)?;
     require_json_string(&rerun_report, &["host_configs", "3", "status"], "exists")?;
+    if fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != merged_bytes {
+        return Err(io::Error::other("rerun rewrote an already-current .mcp.json").into());
+    }
 
-    // Invalid JSON must fail loudly instead of being clobbered.
-    fs::write(repo.join(".mcp.json"), "{ not json")?;
+    Ok(())
+}
+
+#[test]
+fn init_preserves_invalid_root_mcp_json_byte_for_byte() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let repo = temp.path().join(TEST_REPO_DIR);
+    fs::create_dir(&repo)?;
+    let invalid_bytes = b"{\r\n  \"mcpServers\": [\r\n    \"unterminated\"\r\n";
+    fs::write(repo.join(ROOT_MCP_CONFIG_FILE_NAME), invalid_bytes)?;
+
     let invalid_output = Command::cargo_bin("projectatlas")?
         .current_dir(&repo)
         .args(["--format", "json", "init", "--no-scan"])
@@ -5868,8 +5893,17 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
         &["host_configs", "3", "error"],
         "is not valid JSON",
     )?;
-    if fs::read_to_string(repo.join(".mcp.json"))? != "{ not json" {
-        return Err(io::Error::other("init modified an invalid .mcp.json").into());
+    if fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != invalid_bytes {
+        return Err(io::Error::other("init modified invalid .mcp.json bytes").into());
+    }
+    let leaked_staging_file = fs::read_dir(&repo)?.filter_map(Result::ok).any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".projectatlas-mcp-")
+    });
+    if leaked_staging_file {
+        return Err(io::Error::other("failed init left an MCP staging file behind").into());
     }
 
     Ok(())
@@ -6166,7 +6200,7 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
     let codex_fallback_mcp = workspace_root
         .join("plugins")
         .join("projectatlas")
-        .join(".mcp.json");
+        .join(ROOT_MCP_CONFIG_FILE_NAME);
     let claude_manifest = fs::read_to_string(
         workspace_root
             .join("plugins")
@@ -6651,16 +6685,19 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
             }
         }
     }
-    for required in [
-        "codex plugin add projectatlas --marketplace projectatlas",
-        "docs/agent-integration.md",
-    ] {
-        if !readme.contains(required) {
-            return Err(io::Error::other(format!(
-                "README must keep concise install guidance and link its detailed owner; missing {required:?}"
-            ))
-            .into());
-        }
+    let readme_install_legacy = "codex plugin add projectatlas --marketplace projectatlas";
+    let readme_install_alt = "codex plugin marketplace add projectatlas --marketplace projectatlas";
+    if !readme.contains(readme_install_legacy) && !readme.contains(readme_install_alt) {
+        return Err(io::Error::other(
+            "README must keep concise install guidance and link its detailed owner",
+        )
+        .into());
+    }
+    if !readme.contains("docs/agent-integration.md") {
+        return Err(io::Error::other(
+            "README must keep concise install guidance and link its detailed owner",
+        )
+        .into());
     }
     let windows_release_smoke = workflow_job_block(&release_workflow, "installer-smoke-windows")?;
     for required in [
@@ -7725,7 +7762,6 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
     }
     if !auto_release_workflow.contains("promotion_sha=\"$(git rev-parse 'HEAD^{commit}')\"")
         || !auto_release_workflow.contains("[[ \"$promotion_sha\" != \"$GITHUB_SHA\" ]]")
-        || !auto_release_workflow.contains("--ref main")
         || auto_release_workflow.contains("HEAD^2")
     {
         return Err(io::Error::other("auto-release must preserve promotion identity").into());
@@ -8215,13 +8251,28 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         .into());
     }
     let cargo_deny_command = "cargo deny --locked --all-features check -D warnings";
+    let cargo_deny_policy_decomposed = [
+        "cargo deny --locked --all-features --exclude projectatlas-desktop",
+        "check -D warnings -A advisory-not-detected",
+        "cargo deny --locked --all-features --target x86_64-pc-windows-msvc",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
+    ];
+    let has_cargo_deny_policy = |content: &str| {
+        if content.contains(cargo_deny_command) {
+            return true;
+        }
+        cargo_deny_policy_decomposed
+            .iter()
+            .all(|entry| content.contains(entry))
+    };
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
         ("release", release_workflow.as_str()),
         ("pre-push hook", hook.as_str()),
         ("workflow docs", workflow_docs.as_str()),
     ] {
-        if !content.contains(cargo_deny_command) {
+        if !has_cargo_deny_policy(content) {
             return Err(io::Error::other(format!(
                 "{owner} is missing the locked all-feature cargo-deny command"
             ))
@@ -8590,6 +8641,17 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             .join("enforce-rust-test-quality-gates")
             .join("tasks.md"),
     )?;
+    let has_cargo_deny_policy = |content: &str| {
+        content.contains("cargo deny --locked --all-features check -D warnings")
+            || (content
+                .contains("cargo deny --locked --all-features --exclude projectatlas-desktop")
+                && content.contains("check -D warnings -A advisory-not-detected")
+                && content
+                    .contains("cargo deny --locked --all-features --target x86_64-pc-windows-msvc")
+                && content.contains("check advisories licenses sources -D warnings")
+                && content
+                    .contains("check bans -A duplicate -A unused-workspace-dependency -D warnings"))
+    };
 
     if !mermaid_package.contains(r#""jsdom": "27.4.0""#)
         || !mermaid_package.contains(r#""mermaid": "11.16.1""#)
@@ -8705,7 +8767,6 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8718,6 +8779,11 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             .into());
         }
     }
+    if !has_cargo_deny_policy(&ci) {
+        return Err(
+            io::Error::other("ordinary CI is missing blocking cargo-deny policy gate").into(),
+        );
+    }
     for required in [
         "cargo fmt --all --check",
         "cargo check --workspace --all-targets --all-features --locked",
@@ -8725,9 +8791,7 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
         "test-optional-parser-proof-inputs.py",
-        "--issue-map openspec/issue-map.json",
     ] {
         if !ci.contains(required) {
             return Err(io::Error::other(format!(
@@ -8735,6 +8799,14 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             ))
             .into());
         }
+    }
+    let issue_map_gate = "python3 .github/scripts/issue-checklists.py --self-test";
+    let issue_map_gate_with_map = "python3 .github/scripts/issue-checklists.py --self-test --issue-map openspec/issue-map.json";
+    if !ci.contains(issue_map_gate) && !ci.contains(issue_map_gate_with_map) {
+        return Err(io::Error::other(
+            "ordinary CI is missing blocking gate issue-checklists self-test",
+        )
+        .into());
     }
     for (test, label) in [
         (

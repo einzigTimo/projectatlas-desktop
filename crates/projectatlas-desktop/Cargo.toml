@@ -23,16 +23,21 @@ projectatlas-db.workspace = true
 projectatlas-service.workspace = true
 blake3.workspace = true
 ignore.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-shell = "2"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-shell = "2.3.5"
 tiktoken.workspace = true
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+minisign-verify = "0.2.5"

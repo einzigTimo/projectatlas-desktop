@@ -173,6 +173,21 @@ window.PAD.overview = (function () {
     host.appendChild(scopeLine);
   }
 
+  /** Surface a direct calibration action as soon as recorded calls need one. */
+  function renderCalibrationNeeded(data) {
+    const hint = document.getElementById("calibrationNeeded");
+    if (!hint) return;
+    hint.hidden = !data.calibrationNeeded;
+  }
+
+  /** Report calibration progress locally without hiding an already valid overview. */
+  function setCalibrationStatus(message, isError) {
+    const status = document.getElementById("calibActionStatus");
+    if (!status) return;
+    status.textContent = message || "";
+    status.classList.toggle("error", !!isError);
+  }
+
   /**
    * Explain an all-zero overview instead of showing silent nulls.
    *
@@ -257,13 +272,14 @@ window.PAD.overview = (function () {
     renderCategories(buckets);
     renderBreakdown(buckets);
     renderCalibration(data);
+    renderCalibrationNeeded(data);
     setText("statusClock", "Stand " + fmt.clockNow() + " · aktualisiert sich selbst");
 
     if (flash) flashHero();
   }
 
   /** Show or clear the panel-level note used for empty and error states. */
-  function setNote(message, isError) {
+  function setNote(message, isError, heading) {
     const note = document.getElementById("overviewNote");
     const cols = document.getElementById("overviewCols");
     if (!note || !cols) return;
@@ -275,7 +291,7 @@ window.PAD.overview = (function () {
     note.textContent = "";
     note.className = "state-note" + (isError ? " error" : "");
     const head = document.createElement("b");
-    head.textContent = isError ? "Projekt nicht lesbar" : "Nichts anzuzeigen";
+    head.textContent = heading || (isError ? "Projekt nicht lesbar" : "Nichts anzuzeigen");
     note.appendChild(head);
     note.appendChild(document.createTextNode(message));
     note.hidden = false;
@@ -284,6 +300,11 @@ window.PAD.overview = (function () {
 
   return {
     render: render,
-    setNote: setNote
+    setNote: setNote,
+    setLoading: function () {
+      setCalibrationStatus("");
+      setNote("Die Übersicht für das gewählte Projekt wird geladen …", false, "Projekt wird geladen");
+    },
+    setCalibrationStatus: setCalibrationStatus
   };
 })();

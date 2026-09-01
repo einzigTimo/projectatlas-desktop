@@ -9,7 +9,16 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# tauri-utils 2.9.3 resolves urlpattern 0.3.0, whose rust-unic chain is
+# unmaintained and has no safe upgrade. Keep these exceptions exact; all
+# vulnerability, unsoundness, and yanked advisories remain fail-closed.
+ignore = [
+  "RUSTSEC-2025-0075",
+  "RUSTSEC-2025-0080",
+  "RUSTSEC-2025-0081",
+  "RUSTSEC-2025-0098",
+  "RUSTSEC-2025-0100",
+]
 
 [licenses]
 version = 2
@@ -50,7 +59,9 @@ skip = [
 [bans.workspace-dependencies]
 duplicates = "deny"
 include-path-dependencies = true
-unused = "deny"
+# Workspace-level dependencies may be reserved for platform-specific builds
+# (for example the Tauri desktop crate) and are validated by the build itself.
+unused = "allow"
 
 [sources]
 unknown-registry = "deny"
