@@ -384,8 +384,17 @@ table.breakdown .neg { color: var(--red); }
 /* ---------- Overlay (KI-Werkzeuge verbinden) ---------- */
 .setup-intro {
   font-size: 11px; color: var(--muted); line-height: 1.7;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
+.setup-local-info {
+  display: flex; flex-direction: column; gap: 3px;
+  margin-bottom: 12px; padding: 9px 10px;
+  border: 1px solid var(--border-dim); border-radius: 6px;
+  background: var(--panel-2); color: var(--muted);
+  font-size: 10.5px; line-height: 1.55;
+}
+.setup-local-info b { color: var(--ink); font-size: 11px; }
+.setup-local-info code { color: var(--text); font-family: var(--font-ui); }
 .setup-tools { display: flex; flex-direction: column; gap: 4px; }
 .setup-tool {
   display: grid; grid-template-columns: 14px 118px 1fr;
@@ -413,6 +422,8 @@ table.breakdown .neg { color: var(--red); }
   margin-top: 4px; font-size: 13px; font-weight: 700; color: var(--ink);
   overflow-wrap: anywhere;
 }
+.setup-project-mode { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.setup-choose { width: 100%; margin-top: 9px; padding-block: 7px; }
 
 .setup-files { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
 .setup-file {
@@ -457,6 +468,12 @@ table.breakdown .neg { color: var(--red); }
 
 /* Der Einrichtungs-Status zeigt bei einem Fehlschlag mehrzeilige Werkzeug-Ausgabe. */
 #setupState { margin-top: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.setup-restart-hint {
+  margin-top: 10px; padding: 8px 10px;
+  border: 1px solid var(--green);
+  border-radius: 6px; color: var(--text); background: var(--panel-2);
+  font-size: 10.5px; line-height: 1.6;
+}
 
 /* ================================================================
    HELLES DESIGN

@@ -296,18 +296,27 @@
   <div class="overlay" id="setupOverlay" hidden>
     <div class="overlay-card">
       <div class="overlay-head">
-        <span class="uc">KI-Werkzeuge verbinden</span>
+        <span class="uc">ProjectAtlas einrichten</span>
         <button class="overlay-close" id="setupCloseBtn" type="button" title="Schließen">&times;</button>
       </div>
       <div class="overlay-body">
         <div class="setup-intro">
-          Erkannt wird nur, ob der Konfigurationsordner eines Werkzeugs vorhanden ist &ndash;
-          gelesen oder verändert wird darin nichts.
+          Wähle einen Projektordner. ProjectAtlas legt seine Daten dort lokal an und
+          verbindet die erkannten KI-Werkzeuge über projektbezogene Konfigurationsdateien.
+        </div>
+        <div class="setup-local-info">
+          <b>Lokale Daten und Konfiguration</b>
+          <span><code>.projectatlas/projectatlas.db</code> enthält den lokalen Index.</span>
+          <span><code>.projectatlas/projectatlas*.json</code> und <code>.mcp.json</code> verbinden die KI-Werkzeuge mit genau diesem Projekt.</span>
+          <span>Diese Host-Konfigurationen enthalten lokale Benutzer- und Installationspfade: nicht ungeprüft teilen oder committen.</span>
+          <span>ProjectAtlas Desktop überträgt bei dieser Einrichtung keine Projektinhalte. Verbundene KI-Werkzeuge können eigene Datenflüsse haben.</span>
         </div>
         <div class="setup-tools" id="setupTools"></div>
 
-        <div class="setup-project-head uc">Gewähltes Projekt</div>
-        <div class="setup-project" id="setupProject">kein Projekt gewählt</div>
+        <div class="setup-project-head uc">Projektordner</div>
+        <div class="setup-project" id="setupProject">noch kein Ordner gewählt</div>
+        <div class="setup-project-mode" id="setupProjectMode">Für den Erststart bitte einen Ordner wählen.</div>
+        <button class="icon-btn primary setup-choose" id="setupChooseFolderBtn" type="button">Projektordner wählen …</button>
         <div class="setup-files" id="setupFiles"></div>
         <div class="setup-progress" id="setupProgress"></div>
         <div class="setup-activity" id="setupActivity" hidden>
@@ -315,6 +324,10 @@
           <span class="setup-activity-time num" id="setupActivityTime">0 s</span>
         </div>
         <div class="overlay-state" id="setupState"></div>
+        <div class="setup-restart-hint" id="setupRestartHint" hidden>
+          Einrichtung gespeichert. Bereits laufende Codex-, Claude-Code- oder OpenCode-Sitzungen
+          bitte neu starten beziehungsweise das Projektfenster neu öffnen, damit sie die neue MCP-Konfiguration laden.
+        </div>
       </div>
       <div class="overlay-foot setup-foot">
         <label class="setup-scan" title="Ohne Scan bleibt der Beziehungsgraph leer und der Punkt in der Seitenleiste gelb.">
@@ -322,8 +335,8 @@
           <span>Index neu aufbauen (Scan)</span>
         </label>
         <div class="setup-foot-buttons">
-          <button class="icon-btn" id="setupConnectBtn" type="button" disabled>Nur dieses Projekt</button>
-          <button class="icon-btn primary" id="setupConnectAllBtn" type="button">Alle verbinden</button>
+          <button class="icon-btn primary" id="setupConnectBtn" type="button" disabled>Dieses Projekt verbinden</button>
+          <button class="icon-btn" id="setupConnectAllBtn" type="button" disabled>Alle registrierten verbinden</button>
         </div>
       </div>
     </div>

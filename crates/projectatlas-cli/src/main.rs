@@ -3789,15 +3789,50 @@ fn merge_project_claude_mcp_config(
         return Ok(runtime::InitPhaseStatus::Exists);
     }
     let text = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    fs::write(&path, text).map_err(|source| CliError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    replace_file_atomically(&path, text.as_bytes())?;
     Ok(if existed {
         runtime::InitPhaseStatus::Verified
     } else {
         runtime::InitPhaseStatus::Created
     })
+}
+
+/// Durably stage bytes beside their destination, then atomically replace it.
+///
+/// A same-directory temporary file keeps the final persist on one filesystem.
+/// `tempfile` implements overwrite persistence with `MoveFileExW` and
+/// `MOVEFILE_REPLACE_EXISTING` on Windows, so readers never observe a truncated
+/// project-root MCP document.
+fn replace_file_atomically(path: &Path, contents: &[u8]) -> Result<(), CliError> {
+    let parent = path.parent().ok_or_else(|| {
+        CliError::InvalidInput(format!(
+            "cannot atomically replace path without a parent: {}",
+            normalize_native_path_display(path)
+        ))
+    })?;
+    let mut staged = tempfile::Builder::new()
+        .prefix(".projectatlas-mcp-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    staged
+        .write_all(contents)
+        .and_then(|()| staged.flush())
+        .and_then(|()| staged.as_file().sync_all())
+        .map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    staged
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| CliError::Io {
+            path: path.to_path_buf(),
+            source: error.error,
+        })
 }
 
 /// Write one generated MCP config document as pretty JSON.

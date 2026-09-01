@@ -381,6 +381,15 @@ pub(crate) fn rescan(registry: &mut RegistryFile) -> AppResult<()> {
 
 /// Validate and register a manually chosen project folder.
 pub(crate) fn add_manual(registry: &mut RegistryFile, root: &Path) -> AppResult<RegisteredProject> {
+    let entry = ready_manual_project(root)?;
+    registry.projects.retain(|existing| existing.id != entry.id);
+    registry.projects.push(entry.clone());
+    save(registry)?;
+    Ok(entry)
+}
+
+/// Probe a manual project and reject an unreadable database before persistence.
+fn ready_manual_project(root: &Path) -> AppResult<RegisteredProject> {
     let db_path = root.join(PROJECT_DB_RELATIVE_PATH);
     if !db_path.exists() {
         return Err(AppError::Registry(format!(
@@ -390,10 +399,16 @@ pub(crate) fn add_manual(registry: &mut RegistryFile, root: &Path) -> AppResult<
         )));
     }
     let entry = probe_project(root, ProjectSource::Manual);
-    registry.projects.retain(|existing| existing.id != entry.id);
-    registry.projects.push(entry.clone());
-    save(registry)?;
-    Ok(entry)
+    match &entry.status {
+        ProjectStatus::Ok => Ok(entry),
+        ProjectStatus::NotFound => Err(AppError::Registry(format!(
+            "ProjectAtlas-Datenbank ist waehrend der Pruefung verschwunden: {}",
+            db_path.display()
+        ))),
+        ProjectStatus::OpenError { message } => Err(AppError::Registry(format!(
+            "ProjectAtlas-Datenbank konnte nicht sicher geoeffnet werden: {message}"
+        ))),
+    }
 }
 
 /// Remove a project from the registry by id.
@@ -563,6 +578,30 @@ mod tests {
         }
         if fs::read_to_string(&path)? != raw {
             return Err(io::Error::other("future registry file was rewritten").into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn manual_project_rejects_existing_but_unreadable_database()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("project");
+        let db_path = root.join(PROJECT_DB_RELATIVE_PATH);
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .ok_or_else(|| io::Error::other("test database path has no parent"))?,
+        )?;
+        fs::write(&db_path, b"not a sqlite database")?;
+
+        if !matches!(
+            ready_manual_project(&root),
+            Err(AppError::Registry(message)) if message.contains("nicht sicher geoeffnet")
+        ) {
+            return Err(
+                io::Error::other("unreadable database was accepted for registration").into(),
+            );
         }
         Ok(())
     }

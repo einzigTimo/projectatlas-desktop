@@ -5803,7 +5803,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     fs::create_dir(&repo)?;
     fs::write(
         repo.join(ROOT_MCP_CONFIG_FILE_NAME),
-        "{\n  \"mcpServers\": {\n    \"other-server\": {\n      \"command\": \"other\",\n      \"args\": []\n    }\n  }\n}\n",
+        "{\n  \"projectSetting\": {\"preserve\": true},\n  \"mcpServers\": {\n    \"other-server\": {\n      \"command\": \"other\",\n      \"args\": [\"--foreign\"],\n      \"env\": {\"FOREIGN_SETTING\": \"unchanged\"}\n    }\n  }\n}\n",
     )?;
 
     let output = Command::cargo_bin("projectatlas")?
@@ -5830,6 +5830,16 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     if merged["mcpServers"]["other-server"]["command"].as_str() != Some("other") {
         return Err(io::Error::other("init dropped an existing .mcp.json server entry").into());
     }
+    if merged["mcpServers"]["other-server"]["args"] != json!(["--foreign"])
+        || merged["mcpServers"]["other-server"]["env"]["FOREIGN_SETTING"].as_str()
+            != Some("unchanged")
+        || merged["projectSetting"]["preserve"].as_bool() != Some(true)
+    {
+        return Err(io::Error::other(
+            "init changed foreign .mcp.json server fields or top-level settings",
+        )
+        .into());
+    }
     if merged["mcpServers"]["projectatlas"]["command"]
         .as_str()
         .is_none()
@@ -5838,6 +5848,7 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
             io::Error::other("init did not merge projectatlas into existing .mcp.json").into(),
         );
     }
+    let merged_bytes = fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))?;
 
     // A second run must leave the already-current file untouched.
     let rerun_output = Command::cargo_bin("projectatlas")?
@@ -5853,9 +5864,21 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
     }
     let rerun_report: Value = serde_json::from_slice(&rerun_output.stdout)?;
     require_json_string(&rerun_report, &["host_configs", "3", "status"], "exists")?;
+    if fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != merged_bytes {
+        return Err(io::Error::other("rerun rewrote an already-current .mcp.json").into());
+    }
 
-    // Invalid JSON must fail loudly instead of being clobbered.
-    fs::write(repo.join(ROOT_MCP_CONFIG_FILE_NAME), "{ not json")?;
+    Ok(())
+}
+
+#[test]
+fn init_preserves_invalid_root_mcp_json_byte_for_byte() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let repo = temp.path().join(TEST_REPO_DIR);
+    fs::create_dir(&repo)?;
+    let invalid_bytes = b"{\r\n  \"mcpServers\": [\r\n    \"unterminated\"\r\n";
+    fs::write(repo.join(ROOT_MCP_CONFIG_FILE_NAME), invalid_bytes)?;
+
     let invalid_output = Command::cargo_bin("projectatlas")?
         .current_dir(&repo)
         .args(["--format", "json", "init", "--no-scan"])
@@ -5870,8 +5893,17 @@ fn init_merges_projectatlas_into_existing_root_mcp_json() -> Result<(), Box<dyn 
         &["host_configs", "3", "error"],
         "is not valid JSON",
     )?;
-    if fs::read_to_string(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != "{ not json" {
-        return Err(io::Error::other("init modified an invalid .mcp.json").into());
+    if fs::read(repo.join(ROOT_MCP_CONFIG_FILE_NAME))? != invalid_bytes {
+        return Err(io::Error::other("init modified invalid .mcp.json bytes").into());
+    }
+    let leaked_staging_file = fs::read_dir(&repo)?.filter_map(Result::ok).any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".projectatlas-mcp-")
+    });
+    if leaked_staging_file {
+        return Err(io::Error::other("failed init left an MCP staging file behind").into());
     }
 
     Ok(())

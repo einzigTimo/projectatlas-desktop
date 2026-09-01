@@ -72,6 +72,12 @@ if ($artifact.project_id -ne $ProjectId -or $artifact.component_id -ne $Componen
     $artifact.target_app_name -ne $TargetAppName) {
     throw 'Preflight-Artefakt gehoert nicht zu diesem Produktivziel.'
 }
+$authenticodeCertificateThumbprint = (
+    [string]$artifact.authenticode_certificate_thumbprint -replace '\s', ''
+).ToUpperInvariant()
+if ($authenticodeCertificateThumbprint -notmatch '^[0-9A-F]{40}$') {
+    throw 'Preflight-Artefakt enthaelt keinen freigegebenen Authenticode-Zertifikatsthumbprint.'
+}
 
 $rootFull = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd([char]'\', [char]'/')
 $artifactRoot = [IO.Path]::GetFullPath([string]$artifact.canonical_root).TrimEnd([char]'\', [char]'/')
@@ -127,5 +133,7 @@ if ($PassThru) {
         ExpectedCommit  = [string]$artifact.expected_commit
         SourcePath       = [string]$artifact.source_path
         SourceTreeSha256 = [string]$artifact.source_tree_sha256
+        ExpiresAtUtc     = $expires.ToString('o')
+        AuthenticodeCertificateThumbprint = $authenticodeCertificateThumbprint
     }
 }

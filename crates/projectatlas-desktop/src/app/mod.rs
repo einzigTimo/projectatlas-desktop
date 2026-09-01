@@ -53,6 +53,7 @@ pub(crate) fn run() -> Result<(), tauri::Error> {
             setup::detect_ai_tools,
             setup::get_project_connection,
             setup::connect_project,
+            setup::connect_project_path,
             setup::connect_all_projects,
         ])
         .setup(|app| {

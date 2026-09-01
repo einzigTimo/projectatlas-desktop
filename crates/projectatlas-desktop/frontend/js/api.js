@@ -80,6 +80,9 @@ window.PAD.api = (function () {
     detectAiTools: function () { return invoke("detect_ai_tools"); },
     getProjectConnection: function (projectId) { return invoke("get_project_connection", { projectId: projectId }); },
     connectProject: function (projectId, scan) { return invoke("connect_project", { projectId: projectId, scan: !!scan }); },
+    connectProjectPath: function (path, scan) {
+      return invoke("connect_project_path", { path: path, scan: !!scan });
+    },
     connectAllProjects: function (scan) { return invoke("connect_all_projects", { scan: !!scan }); },
     calibrateProject: function (projectId, tokenizer) { return invoke("calibrate_project", { projectId: projectId, tokenizer: tokenizer }); }
   };

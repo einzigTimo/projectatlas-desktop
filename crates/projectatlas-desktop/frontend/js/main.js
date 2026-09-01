@@ -116,7 +116,11 @@
     };
     activeProjectId = projectCatalog.activeProjectId;
     const active = activeProject();
-    setup.setProject(activeProjectId, active ? active.displayName : null);
+    setup.setProject(
+      activeProjectId,
+      active ? active.displayName : null,
+      active ? active.root : null
+    );
     return refreshPurposeFilter().then(function () { return payload; });
   }
 
@@ -124,7 +128,7 @@
   function loadActiveProject() {
     if (!activeProjectId) {
       overview.setNote(
-        "Kein Projekt ausgewählt. Über „Scan“ oder „+ Ordner“ links ein ProjectAtlas-Projekt hinzufügen.",
+        "Kein Projekt eingerichtet. Über „+ Ordner“ links den geführten Erststart öffnen.",
         false
       );
       trend.clear();
@@ -202,6 +206,15 @@
       });
   }
 
+  /** Reload sidebar and panels after setup made a project active. */
+  function refreshAfterSetup() {
+    return api
+      .listProjects()
+      .then(applyProjectList)
+      .then(loadActiveProject)
+      .then(loadBadges);
+  }
+
   /** Switch the displayed project. */
   function selectProject(projectId) {
     if (projectId === activeProjectId) return;
@@ -238,16 +251,7 @@
     });
 
     addButton.addEventListener("click", function () {
-      api
-        .pickFolder()
-        .then(function (folder) {
-          if (!folder) return null;
-          return api.addProjectManual(folder).then(applyProjectList).then(loadActiveProject);
-        })
-        .then(loadBadges)
-        .catch(function (error) {
-          overview.setNote(message(error), true);
-        });
+      setup.openForFolder();
     });
 
     projects.setSelectHandler(selectProject);
@@ -407,7 +411,7 @@
     theme.wire();
     atlas.wire();
     update.wire();
-    setup.wire();
+    setup.wire({ onProjectConnected: refreshAfterSetup });
     wireCalibration();
 
     // Die Statuszeile fragt die Version beim Programm nach, statt sie im Markup
@@ -428,7 +432,8 @@
       .then(function (payload) {
         const isEmpty = payload && payload.projects && payload.projects.length === 0;
         return applyProjectList(payload).then(function () {
-          return isEmpty ? api.rescanProjects().then(applyProjectList) : payload;
+          if (isEmpty) setup.openFirstRun();
+          return payload;
         });
       })
       .then(loadActiveProject)
