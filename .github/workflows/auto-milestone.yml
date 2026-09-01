@@ -55,7 +55,7 @@ jobs:
             milestone="$api_out"
             if [[ -n "$milestone" ]]; then
               echo "Found milestone $milestone from issue/PR #$num – assigning to PR #$PR_NUMBER."
-              gh api --method PATCH "repos/$REPO/pulls/$PR_NUMBER" \
+              gh api --method PATCH "repos/$REPO/issues/$PR_NUMBER" \
                 --input - <<< "{\"milestone\": $milestone}"
               echo "Milestone set."
               exit 0
