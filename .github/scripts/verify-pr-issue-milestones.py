@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 
@@ -26,7 +27,7 @@ def run(args: list[str]) -> str:
     )
     if process.returncode:
         raise SystemExit(
-            f"command failed: {' '.join(args)}\n{process.stderr.strip()}"
+            f"command failed: {shlex.join(args)}\n{process.stderr.strip()}"
         )
     return process.stdout
 
@@ -46,12 +47,6 @@ def issue_references(text: str, default_repo: str) -> list[tuple[str, int]]:
     for match in GH_REFERENCE_PATTERN.finditer(text):
         references.add((default_repo, int(match.group("number"))))
     return sorted(references)
-
-
-def fetch_pull_request(repo: str, number: int) -> dict[str, object]:
-    owner, name = split_repo(repo)
-    payload = run(["gh", "api", f"repos/{owner}/{name}/pulls/{number}"])
-    return json.loads(payload)
 
 
 def fetch_issue(repo: str, number: int) -> dict[str, object]:
@@ -89,7 +84,7 @@ def verify_references(
 
 
 def verify_pull_request(repo: str, number: int) -> list[str]:
-    pull_request = fetch_pull_request(repo, number)
+    pull_request = fetch_issue(repo, number)
     title = str(pull_request.get("title") or "")
     body = str(pull_request.get("body") or "")
     references = issue_references(f"{title} {body}", repo)
