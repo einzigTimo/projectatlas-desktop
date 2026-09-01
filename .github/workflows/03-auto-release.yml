@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   release:
@@ -88,6 +88,7 @@ jobs:
             echo
             echo "Version: ${{ steps.release.outputs.tag }}"
             echo "Parser-Pack-Lauf: ${{ steps.parser_pack.outputs.run_id }}"
+            echo "Geplanter Zentralen-Dispatch: --field parser_pack_run_id=${{ steps.parser_pack.outputs.run_id }}"
             echo
             echo "Es wurde absichtlich kein Release-Workflow gestartet."
             echo "Produktive Releases laufen ausschließlich über die Develop Zentrale."

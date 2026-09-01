@@ -1,6 +1,8 @@
 name: 00-IssueOps
 
 on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled, milestoned]
   workflow_dispatch:
     inputs:
       issue:
