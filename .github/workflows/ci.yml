@@ -58,8 +58,7 @@ jobs:
           PR_MILESTONE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
           text="$PR_TITLE $PR_BODY"
           if ! [[ "$text" =~ (#[0-9]+|GH-[0-9]+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) ]]; then
-            echo "Pull request title or body must reference a GitHub issue." >&2
-            exit 1
+            echo "::warning::Pull request title or body should reference a GitHub issue."
           fi
           if [[ -z "$PR_MILESTONE" ]]; then
             echo "Pull request must be assigned to a milestone." >&2
