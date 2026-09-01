@@ -11,9 +11,9 @@ import sys
 
 
 REFERENCE_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_.-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<number>[0-9]+)\b"
+    r"(?<![A-Za-z0-9_.-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<number>[1-9][0-9]*)\b"
 )
-GH_REFERENCE_PATTERN = re.compile(r"\bGH-(?P<number>[0-9]+)\b")
+GH_REFERENCE_PATTERN = re.compile(r"\bGH-(?P<number>[1-9][0-9]*)\b")
 
 
 def run(args: list[str]) -> str:
@@ -93,7 +93,7 @@ def verify_pull_request(repo: str, number: int) -> list[str]:
     title = str(pull_request.get("title") or "")
     body = str(pull_request.get("body") or "")
     references = issue_references(f"{title} {body}", repo)
-    return verify_references(repo, references)
+    return verify_references(repo, references, issue_fetcher=fetch_issue)
 
 
 def self_test() -> None:
@@ -106,6 +106,7 @@ def self_test() -> None:
         ("test-owner/test-repo", 7),
         ("test-owner/test-repo", 12),
     ]
+    assert issue_references("Ignored #0 and GH-0 references", "test-owner/test-repo") == []
 
     failures = verify_references("test-owner/test-repo", [])
     assert failures == ["Pull request title or body must reference a GitHub issue."]
