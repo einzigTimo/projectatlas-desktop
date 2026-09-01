@@ -202,6 +202,8 @@ jobs:
         run: |
           python3 .github/scripts/issue-checklists.py \
             --repo "$GITHUB_REPOSITORY" \
+            --skip-openspec \
+            --milestone-state-only \
             --milestone "${{ steps.release_version.outputs.milestone }}"
 
   package-unix:

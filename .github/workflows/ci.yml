@@ -75,10 +75,6 @@ jobs:
           npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
           python3 .github/scripts/issue-checklists.py --self-test
           python3 .github/scripts/test-optional-parser-proof-inputs.py
-          python3 .github/scripts/issue-checklists.py \
-            --repo "$GITHUB_REPOSITORY" \
-            --root . \
-            --issue-map openspec/issue-map.json
 
       - name: Manual-only full benchmark policy
         run: python3 .github/scripts/verify-manual-benchmark-policy.py

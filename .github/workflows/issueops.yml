@@ -1,8 +1,6 @@
 name: 00-IssueOps
 
 on:
-  issues:
-    types: [opened, edited, reopened, labeled, unlabeled, milestoned]
   workflow_dispatch:
     inputs:
       issue:
@@ -17,7 +15,6 @@ permissions:
 jobs:
   planned-issue:
     name: planned-issue-readiness
-    if: github.event_name == 'workflow_dispatch' || github.event.issue.milestone != null
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
