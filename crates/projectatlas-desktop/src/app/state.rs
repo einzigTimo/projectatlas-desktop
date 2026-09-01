@@ -5,6 +5,7 @@
 //! telemetry arrived" without re-rendering anything: only a changed fingerprint
 //! emits an event, and only then does the frontend patch the affected text nodes.
 
+use crate::app::error::{AppError, AppResult};
 use crate::app::registry::{ProjectStatus, RegisteredProject, RegistryFile, load};
 use crate::app::view::{ActivityView, OverviewView, TrendView};
 use projectatlas_core::telemetry::TokenCalibrationOverview;
@@ -40,6 +41,8 @@ struct ProjectFingerprints {
 struct Inner {
     /// Known projects, mirrored from disk.
     registry: RegistryFile,
+    /// Startup failure retained so a future-version registry cannot be overwritten.
+    registry_load_error: Option<String>,
     /// Id of the project currently shown in the content area.
     active_project_id: Option<String>,
     /// Calendar grouping the trend panel currently displays.
@@ -73,11 +76,15 @@ pub(crate) struct ProjectBadge {
 impl AppState {
     /// Build the state from the on-disk registry, starting empty when none exists.
     pub(crate) fn load_or_default() -> Self {
-        let registry = load().unwrap_or_default();
+        let (registry, registry_load_error) = match load() {
+            Ok(registry) => (registry, None),
+            Err(error) => (RegistryFile::default(), Some(error.to_string())),
+        };
         let active_project_id = preferred_project(&registry.projects);
         Self {
             inner: Mutex::new(Inner {
                 registry,
+                registry_load_error,
                 active_project_id,
                 trend_window: DEFAULT_TREND_WINDOW.to_string(),
                 fingerprints: HashMap::new(),
@@ -91,6 +98,20 @@ impl AppState {
         self.inner.lock().await.registry.clone()
     }
 
+    /// Return the registry only when startup loaded it successfully.
+    ///
+    /// Keeping the startup error in state prevents a newer registry schema from
+    /// being replaced with an empty current-version file by a later rescan.
+    pub(crate) async fn registry_result(&self) -> AppResult<RegistryFile> {
+        let inner = self.inner.lock().await;
+        match &inner.registry_load_error {
+            Some(message) => Err(AppError::Registry(format!(
+                "Die vorhandene Registrierungsdatei bleibt unveraendert: {message}"
+            ))),
+            None => Ok(inner.registry.clone()),
+        }
+    }
+
     /// Replace the in-memory registry after a scan or manual change.
     pub(crate) async fn set_registry(&self, registry: RegistryFile) {
         let mut inner = self.inner.lock().await;
@@ -102,6 +123,7 @@ impl AppState {
             inner.active_project_id = preferred_project(&registry.projects);
         }
         inner.registry = registry;
+        inner.registry_load_error = None;
     }
 
     /// Return the id of the project currently displayed, if any.

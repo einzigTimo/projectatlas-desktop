@@ -13,9 +13,9 @@
     reason = "the tauri::command macro expansion triggers it, not this module's own code"
 )]
 
-use crate::app::atlas::AtlasView;
+use crate::app::atlas::{AtlasView, FileRelationsView};
 use crate::app::error::{AppError, AppResult};
-use crate::app::registry::{self, ProjectSource, ProjectStatus, RegisteredProject};
+use crate::app::registry::{self, ProjectSource, ProjectStatus, PurposeSummary, RegisteredProject};
 use crate::app::state::{ACTIVITY_LIMIT, AppState, Payload, ProjectBadge};
 use crate::app::view::{ActivityView, OverviewView, TrendView};
 use crate::app::{polling, query};
@@ -51,6 +51,8 @@ pub(crate) struct ProjectView {
     pub(crate) status: ProjectStatusView,
     /// Failure reason when the status is [`ProjectStatusView::OpenError`].
     pub(crate) status_message: Option<String>,
+    /// Aggregate purpose lifecycle coverage, or `None` when the database is unreachable.
+    pub(crate) purpose_summary: Option<PurposeSummary>,
 }
 
 /// The sidebar payload: all known projects plus the current selection.
@@ -79,12 +81,13 @@ fn project_view(project: &RegisteredProject) -> ProjectView {
         manual: project.source == ProjectSource::Manual,
         status,
         status_message,
+        purpose_summary: project.purpose_summary.clone(),
     }
 }
 
 /// Resolve one project id to the paths its queries need.
 async fn locate(state: &State<'_, AppState>, project_id: &str) -> AppResult<(PathBuf, PathBuf)> {
-    let registry = state.registry().await;
+    let registry = state.registry_result().await?;
     let project = registry::find(&registry, project_id)?;
     Ok((project.db_path.clone(), project.root.clone()))
 }
@@ -101,23 +104,22 @@ where
 }
 
 /// Build the current sidebar payload.
-pub(crate) async fn project_list(state: &State<'_, AppState>) -> ProjectListView {
-    let registry = state.registry().await;
-    ProjectListView {
+pub(crate) async fn project_list(state: &State<'_, AppState>) -> AppResult<ProjectListView> {
+    let registry = state.registry_result().await?;
+    Ok(ProjectListView {
         projects: registry.projects.iter().map(project_view).collect(),
         active_project_id: state.active_project_id().await,
-    }
+    })
 }
 
 /// List every known project without touching the filesystem.
 ///
 /// # Errors
 ///
-/// Never fails today; the result stays fallible so the frontend contract survives
-/// a future registry read that can fail.
+/// Returns the retained startup error when the on-disk registry could not be loaded.
 #[tauri::command]
 pub(crate) async fn list_projects(state: State<'_, AppState>) -> AppResult<ProjectListView> {
-    Ok(project_list(&state).await)
+    project_list(&state).await
 }
 
 /// Re-scan the configured roots and re-check every known project.
@@ -127,14 +129,14 @@ pub(crate) async fn list_projects(state: State<'_, AppState>) -> AppResult<Proje
 /// Returns an error when the registry cannot be read or written.
 #[tauri::command]
 pub(crate) async fn rescan_projects(state: State<'_, AppState>) -> AppResult<ProjectListView> {
-    let mut registry = state.registry().await;
+    let mut registry = state.registry_result().await?;
     let scanned = blocking(move || {
         registry::rescan(&mut registry)?;
         Ok(registry)
     })
     .await?;
     state.set_registry(scanned).await;
-    Ok(project_list(&state).await)
+    project_list(&state).await
 }
 
 /// Register a project folder the user picked manually.
@@ -148,7 +150,7 @@ pub(crate) async fn add_project_manual(
     state: State<'_, AppState>,
     path: String,
 ) -> AppResult<ProjectListView> {
-    let mut registry = state.registry().await;
+    let mut registry = state.registry_result().await?;
     let root = PathBuf::from(path);
     let updated = blocking(move || {
         registry::add_manual(&mut registry, &root)?;
@@ -156,7 +158,7 @@ pub(crate) async fn add_project_manual(
     })
     .await?;
     state.set_registry(updated).await;
-    Ok(project_list(&state).await)
+    project_list(&state).await
 }
 
 /// Remove one project from the registry.
@@ -169,7 +171,7 @@ pub(crate) async fn remove_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<ProjectListView> {
-    let mut registry = state.registry().await;
+    let mut registry = state.registry_result().await?;
     let id = project_id.clone();
     let updated = blocking(move || {
         registry::remove(&mut registry, &id)?;
@@ -178,7 +180,7 @@ pub(crate) async fn remove_project(
     .await?;
     state.forget_fingerprints(&project_id).await;
     state.set_registry(updated).await;
-    Ok(project_list(&state).await)
+    project_list(&state).await
 }
 
 /// Switch which project the content area shows.
@@ -191,10 +193,10 @@ pub(crate) async fn switch_active_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<ProjectListView> {
-    let registry = state.registry().await;
+    let registry = state.registry_result().await?;
     registry::find(&registry, &project_id)?;
     state.set_active_project_id(project_id).await;
-    Ok(project_list(&state).await)
+    project_list(&state).await
 }
 
 /// Load one project's all-time savings overview.
@@ -284,6 +286,22 @@ pub(crate) async fn get_atlas_map(
     blocking(move || crate::app::atlas::atlas_map(&db_path, &root)).await
 }
 
+/// Load direct incoming and outgoing relations for one repository file.
+///
+/// # Errors
+///
+/// Returns an error when the project is unknown, the path is invalid, or the
+/// database graph cannot be read.
+#[tauri::command]
+pub(crate) async fn get_file_relations(
+    state: State<'_, AppState>,
+    project_id: String,
+    file_path: String,
+) -> AppResult<FileRelationsView> {
+    let (db_path, root) = locate(&state, &project_id).await?;
+    blocking(move || crate::app::atlas::file_relations(&db_path, &root, &file_path)).await
+}
+
 /// Load the headline numbers of every reachable project for the sidebar badges.
 ///
 /// # Errors
@@ -292,7 +310,7 @@ pub(crate) async fn get_atlas_map(
 /// failing the badge refresh for all of them.
 #[tauri::command]
 pub(crate) async fn get_project_badges(state: State<'_, AppState>) -> AppResult<Vec<ProjectBadge>> {
-    let registry = state.registry().await;
+    let registry = state.registry_result().await?;
     Ok(polling::collect_badges(registry).await)
 }
 
@@ -335,4 +353,77 @@ pub(crate) async fn calibrate_project(
         )
         .await;
     Ok(overview)
+}
+
+// ── P4 – Heading selectors ────────────────────────────────────────────────────
+
+pub(crate) use crate::app::query::HeadingEntry;
+
+/// Extract all Markdown headings from one indexed file.
+///
+/// Returns an empty list for non-Markdown files or files whose text is not
+/// stored in the index. Absence of a file returns an empty list so the
+/// frontend can show "no sections" instead of an error.
+///
+/// # Errors
+///
+/// Returns an error when the project id is unknown or the database cannot be
+/// opened.
+#[tauri::command]
+pub(crate) async fn get_file_headings(
+    state: State<'_, AppState>,
+    project_id: String,
+    file_path: String,
+) -> AppResult<Vec<HeadingEntry>> {
+    let (db_path, root) = locate(&state, &project_id).await?;
+    blocking(move || query::file_headings(&db_path, &root, &file_path)).await
+}
+
+// ── P5 – Purpose routing ──────────────────────────────────────────────────────
+
+/// List projects that have at least one indexed node whose purpose matches a query.
+///
+/// `purpose` is free responsibility text, not a closed category enum. Matching
+/// is case-insensitive and purpose-only; paths and source text do not contribute.
+///
+/// Returns the same [`ProjectListView`] shape as [`list_projects`] so the
+/// frontend can reuse the same rendering path with an active filter applied.
+///
+/// # Errors
+///
+/// Returns an error when the registry cannot be loaded or the worker cannot be joined;
+/// individual projects whose database cannot be read are omitted (best effort).
+#[tauri::command]
+pub(crate) async fn list_projects_by_purpose(
+    state: State<'_, AppState>,
+    purpose: String,
+) -> AppResult<ProjectListView> {
+    let registry = state.registry_result().await?;
+    let purpose_query = purpose.trim().to_string();
+    if purpose_query.is_empty() {
+        return project_list(&state).await;
+    }
+    let candidates = registry.projects;
+    let projects: Vec<ProjectView> = blocking(move || {
+        Ok(candidates
+            .iter()
+            .filter(|project| {
+                matches!(&project.status, ProjectStatus::Ok)
+                    && query::project_matches_purpose(
+                        &project.db_path,
+                        &project.root,
+                        &purpose_query,
+                    )
+                    .unwrap_or(false)
+            })
+            .map(project_view)
+            .collect())
+    })
+    .await?;
+    let current = state.active_project_id().await;
+    let active_project_id = current.filter(|id| projects.iter().any(|project| &project.id == id));
+    Ok(ProjectListView {
+        projects,
+        active_project_id,
+    })
 }

@@ -138,15 +138,69 @@ window.PAD.trend = (function () {
       });
   }
 
+  /** Fill the per-period savings-bucket breakdown supplied by the trend view. */
+  function drawBucketTable(periods) {
+    const body = document.getElementById("trendBucketBody");
+    if (!body) return;
+    body.textContent = "";
+
+    let rowCount = 0;
+    periods
+      .slice()
+      .reverse()
+      .forEach(function (period) {
+        (period.buckets || []).forEach(function (bucket) {
+          rowCount += 1;
+          const row = document.createElement("tr");
+          const saved = bucket.saved;
+          const providerModel = [bucket.provider, bucket.model]
+            .filter(function (part) { return !!part; })
+            .join(" / ");
+          const cells = [
+            { text: fmt.periodLabel(period.period), cls: "" },
+            { text: bucket.bucket || "–", cls: "" },
+            { text: providerModel || "–", cls: "" },
+            { text: fmt.int(bucket.calls), cls: "num" },
+            { text: fmt.tokens(saved), cls: "num " + (saved < 0 ? "neg" : "pos") },
+            { text: fmt.percent(bucket.savingsRate), cls: "num " + (saved < 0 ? "neg" : "pos") }
+          ];
+          cells.forEach(function (spec) {
+            const cell = document.createElement("td");
+            if (spec.cls) cell.className = spec.cls;
+            cell.textContent = spec.text;
+            row.appendChild(cell);
+          });
+          body.appendChild(row);
+        });
+      });
+
+    if (rowCount === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 6;
+      cell.textContent = "Für dieses Zeitfenster liegen noch keine Kategorie-Werte vor.";
+      row.appendChild(cell);
+      body.appendChild(row);
+    }
+  }
+
   /** Render chart and table from one backend payload. */
   function render(data) {
     const periods = (data && data.periods) || [];
     drawChart(periods);
     drawTable(periods);
+    drawBucketTable(periods);
+    const limitNote = document.getElementById("trendLimitNote");
+    if (limitNote) {
+      limitNote.textContent = data && data.truncated
+        ? "Begrenzter Ausschnitt: Die neuesten Perioden und maximal 240 Bucket-Zeilen werden angezeigt."
+        : "";
+      limitNote.hidden = !(data && data.truncated);
+    }
   }
 
   /** Show or clear the trend panel's note. */
-  function setNote(message, isError) {
+  function setNote(message, isError, heading) {
     const note = document.getElementById("trendNote");
     if (!note) return;
     if (!message) {
@@ -156,7 +210,7 @@ window.PAD.trend = (function () {
     note.textContent = "";
     note.className = "state-note" + (isError ? " error" : "");
     const head = document.createElement("b");
-    head.textContent = isError ? "Zeitverlauf nicht lesbar" : "Nichts anzuzeigen";
+    head.textContent = heading || (isError ? "Zeitverlauf nicht lesbar" : "Nichts anzuzeigen");
     note.appendChild(head);
     note.appendChild(document.createTextNode(message));
     note.hidden = false;
@@ -170,9 +224,29 @@ window.PAD.trend = (function () {
     });
   }
 
+  /** Remove values from the previously selected project. */
+  function clear() {
+    const svg = document.getElementById("trendSvg");
+    const periods = document.getElementById("trendBody");
+    const buckets = document.getElementById("trendBucketBody");
+    if (svg) svg.textContent = "";
+    if (periods) periods.textContent = "";
+    if (buckets) buckets.textContent = "";
+    const limitNote = document.getElementById("trendLimitNote");
+    if (limitNote) limitNote.hidden = true;
+  }
+
+  /** Clear stale values and show a project-bound loading state. */
+  function setLoading() {
+    clear();
+    setNote("Der Zeitverlauf für das gewählte Projekt wird geladen …", false, "Zeitverlauf wird geladen");
+  }
+
   return {
     render: render,
     setNote: setNote,
+    clear: clear,
+    setLoading: setLoading,
     setWindow: setWindow
   };
 })();

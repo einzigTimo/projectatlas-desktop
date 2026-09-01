@@ -3543,8 +3543,10 @@ dependencies = [
 name = "projectatlas-desktop"
 version = "0.2.3"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "ignore",
+ "minisign-verify",
  "projectatlas-core",
  "projectatlas-db",
  "projectatlas-service",
@@ -3556,6 +3558,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-shell",
  "tauri-plugin-updater",
+ "tempfile",
  "thiserror 2.0.18",
  "tiktoken",
  "tokio",
