@@ -59,7 +59,9 @@ skip = [
 [bans.workspace-dependencies]
 duplicates = "deny"
 include-path-dependencies = true
-unused = "deny"
+# Workspace-level dependencies may be reserved for platform-specific builds
+# (for example the Tauri desktop crate) and are validated by the build itself.
+unused = "allow"
 
 [sources]
 unknown-registry = "deny"
