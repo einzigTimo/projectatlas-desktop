@@ -364,10 +364,10 @@ pub(crate) fn atlas_map(db_path: &Path, root: &Path) -> AppResult<AtlasView> {
         truncated |= page.truncated;
 
         for row in page.rows {
-            let relation = row.relation.kind().as_str().to_string();
             if !network_relation(row.relation.kind()) {
                 continue;
             }
+            let relation = row.relation.kind().as_str().to_string();
             let Some(target) = row.target else {
                 continue;
             };
