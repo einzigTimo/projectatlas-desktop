@@ -83,12 +83,16 @@ def verify_references(
     return failures
 
 
-def verify_pull_request(repo: str, number: int) -> list[str]:
-    pull_request = fetch_issue(repo, number)
+def verify_pull_request(
+    repo: str,
+    number: int,
+    issue_fetcher=fetch_issue,
+) -> list[str]:
+    pull_request = issue_fetcher(repo, number)
     title = str(pull_request.get("title") or "")
     body = str(pull_request.get("body") or "")
     references = issue_references(f"{title} {body}", repo)
-    return verify_references(repo, references, issue_fetcher=fetch_issue)
+    return verify_references(repo, references, issue_fetcher=issue_fetcher)
 
 
 def self_test() -> None:
@@ -124,12 +128,12 @@ def self_test() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", default="")
-    parser.add_argument("--pr", type=int, default=0)
+    parser.add_argument("--pr", type=int)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
-        if args.repo or args.pr > 0:
+        if args.repo or args.pr is not None:
             raise SystemExit("--self-test cannot be combined with --repo or --pr")
         try:
             self_test()
@@ -138,7 +142,7 @@ def main() -> int:
         print("PR issue milestone policy self-test passed")
         return 0
 
-    if not args.repo or args.pr <= 0:
+    if not args.repo or args.pr is None or args.pr <= 0:
         raise SystemExit("--repo and --pr are required unless --self-test is used")
 
     failures = verify_pull_request(args.repo, args.pr)
