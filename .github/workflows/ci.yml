@@ -73,7 +73,9 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix .github/mermaid-parser
           npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
-          python3 .github/scripts/issue-checklists.py --self-test
+          python3 .github/scripts/issue-checklists.py \
+            --self-test \
+            --issue-map openspec/issue-map.json
           python3 .github/scripts/test-optional-parser-proof-inputs.py
 
       - name: Manual-only full benchmark policy

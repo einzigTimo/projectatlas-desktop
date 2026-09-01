@@ -16,6 +16,8 @@ Weitere technische Einstiege: [Runtime installation and repair](docs/agent-integ
 [Token reporting and human TUI](docs/agent-integration.md#token-reporting-and-human-tui),
 [MCP tool sequence](docs/agent-integration.md#mcp-tool-sequence).
 
+Für die Erstverteilung: `codex plugin add projectatlas --marketplace projectatlas`.
+
 Every file not opened. Every folder not explored. ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph, reducing token costs by over 90%.
 
 The "over 90%" figure is a workload-specific local estimate from the published audit, not a universal savings guarantee or provider-billing result; see [One Large-Application Audit](#one-large-application-audit).

@@ -74,6 +74,7 @@ jobs:
           fi
           parser_pack_run_id="$(
             python3 .github/scripts/resolve-optional-parser-handoff.py \
+              --ref main \
               --repository "$GITHUB_REPOSITORY" \
               --promotion-sha "$promotion_sha"
           )"
