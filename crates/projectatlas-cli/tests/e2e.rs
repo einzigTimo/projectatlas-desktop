@@ -8249,13 +8249,28 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         .into());
     }
     let cargo_deny_command = "cargo deny --locked --all-features check -D warnings";
+    let cargo_deny_policy_decomposed = [
+        "cargo deny --locked --all-features --exclude projectatlas-desktop",
+        "check -D warnings -A advisory-not-detected",
+        "cargo deny --locked --all-features --target x86_64-pc-windows-msvc",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
+    ];
+    let has_cargo_deny_policy = |content: &str| {
+        if content.contains(cargo_deny_command) {
+            return true;
+        }
+        cargo_deny_policy_decomposed
+            .iter()
+            .all(|entry| content.contains(entry))
+    };
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
         ("release", release_workflow.as_str()),
         ("pre-push hook", hook.as_str()),
         ("workflow docs", workflow_docs.as_str()),
     ] {
-        if !content.contains(cargo_deny_command) {
+        if !has_cargo_deny_policy(content) {
             return Err(io::Error::other(format!(
                 "{owner} is missing the locked all-feature cargo-deny command"
             ))
@@ -8624,6 +8639,17 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             .join("enforce-rust-test-quality-gates")
             .join("tasks.md"),
     )?;
+    let has_cargo_deny_policy = |content: &str| {
+        content.contains("cargo deny --locked --all-features check -D warnings")
+            || (content.contains(
+                "cargo deny --locked --all-features --exclude projectatlas-desktop",
+            ) && content.contains("check -D warnings -A advisory-not-detected")
+                && content.contains(
+                    "cargo deny --locked --all-features --target x86_64-pc-windows-msvc",
+                )
+                && content.contains("check advisories licenses sources -D warnings")
+                && content.contains("check bans -A duplicate -A unused-workspace-dependency -D warnings"))
+    };
 
     if !mermaid_package.contains(r#""jsdom": "27.4.0""#)
         || !mermaid_package.contains(r#""mermaid": "11.16.1""#)
@@ -8739,7 +8765,6 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8752,6 +8777,12 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             .into());
         }
     }
+    if !has_cargo_deny_policy(&ci) {
+        return Err(io::Error::other(
+            "ordinary CI is missing blocking cargo-deny policy gate",
+        )
+        .into());
+    }
     for required in [
         "cargo fmt --all --check",
         "cargo check --workspace --all-targets --all-features --locked",
@@ -8759,7 +8790,6 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
         "test-optional-parser-proof-inputs.py",
         "--issue-map openspec/issue-map.json",
     ] {
