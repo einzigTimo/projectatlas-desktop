@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 
 
 REFERENCE_PATTERN = re.compile(
@@ -141,7 +142,7 @@ def main() -> int:
     failures = verify_pull_request(args.repo, args.pr)
     if failures:
         for failure in failures:
-            print(failure)
+            print(failure, file=sys.stderr)
         return 1
 
     print("PR issue milestone policy passed")
