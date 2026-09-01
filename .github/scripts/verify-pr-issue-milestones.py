@@ -55,6 +55,7 @@ def fetch_pull_request(repo: str, number: int) -> dict[str, object]:
 
 
 def fetch_issue(repo: str, number: int) -> dict[str, object]:
+    """Fetch a GitHub issue payload, which also covers pull requests by number."""
     owner, name = split_repo(repo)
     payload = run(["gh", "api", f"repos/{owner}/{name}/issues/{number}"])
     return json.loads(payload)
@@ -110,7 +111,7 @@ def self_test() -> None:
     assert failures == ["Pull request title or body must reference a GitHub issue."]
 
     fake_issues = {
-        ("einzigTimo/projectatlas-desktop", 11): {"milestone": {"title": "v0.2.3-00"}},
+        ("einzigTimo/projectatlas-desktop", 11): {"milestone": {"title": "Version 0.2.3"}},
         ("octo/example", 9): {"milestone": None},
     }
     failures = verify_references(
