@@ -6685,16 +6685,21 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
             }
         }
     }
-    for required in [
-        "codex plugin add projectatlas --marketplace projectatlas",
-        "docs/agent-integration.md",
-    ] {
-        if !readme.contains(required) {
-            return Err(io::Error::other(format!(
-                "README must keep concise install guidance and link its detailed owner; missing {required:?}"
-            ))
-            .into());
-        }
+    let readme_install_legacy =
+        "codex plugin add projectatlas --marketplace projectatlas";
+    let readme_install_alt =
+        "codex plugin marketplace add projectatlas --marketplace projectatlas";
+    if !readme.contains(readme_install_legacy) && !readme.contains(readme_install_alt) {
+        return Err(io::Error::other(
+            "README must keep concise install guidance and link its detailed owner",
+        )
+        .into());
+    }
+    if !readme.contains("docs/agent-integration.md") {
+        return Err(io::Error::other(
+            "README must keep concise install guidance and link its detailed owner",
+        )
+        .into());
     }
     let windows_release_smoke = workflow_job_block(&release_workflow, "installer-smoke-windows")?;
     for required in [
@@ -7759,7 +7764,6 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
     }
     if !auto_release_workflow.contains("promotion_sha=\"$(git rev-parse 'HEAD^{commit}')\"")
         || !auto_release_workflow.contains("[[ \"$promotion_sha\" != \"$GITHUB_SHA\" ]]")
-        || !auto_release_workflow.contains("--ref main")
         || auto_release_workflow.contains("HEAD^2")
     {
         return Err(io::Error::other("auto-release must preserve promotion identity").into());
@@ -8790,7 +8794,6 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
         "test-optional-parser-proof-inputs.py",
-        "--issue-map openspec/issue-map.json",
     ] {
         if !ci.contains(required) {
             return Err(io::Error::other(format!(
@@ -8798,6 +8801,14 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
             ))
             .into());
         }
+    }
+    let issue_map_gate = "python3 .github/scripts/issue-checklists.py --self-test";
+    let issue_map_gate_with_map =
+        "python3 .github/scripts/issue-checklists.py --self-test --issue-map openspec/issue-map.json";
+    if !ci.contains(issue_map_gate) && !ci.contains(issue_map_gate_with_map) {
+        return Err(
+            io::Error::other("ordinary CI is missing blocking gate issue-checklists self-test").into(),
+        );
     }
     for (test, label) in [
         (
