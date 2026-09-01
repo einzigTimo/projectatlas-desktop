@@ -8,10 +8,16 @@ on:
   pull_request:
     branches: [main, dev]
     types: [opened, synchronize, edited, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to assign a milestone to"
+        required: true
+        type: string
 
 permissions:
   contents: read
-  issues: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -19,10 +25,13 @@ jobs:
     name: set-milestone
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
       - name: Assign milestone from referenced issue
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           PR_MILESTONE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
@@ -63,3 +72,25 @@ jobs:
           done
 
           echo "No milestone found in any referenced issue/PR."
+
+          # Fallback: create or reuse a milestone based on the current crate version.
+          VERSION="$(grep -m1 '^version' crates/projectatlas-desktop/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          MILESTONE_TITLE="v${VERSION}"
+          echo "Falling back to version-based milestone: $MILESTONE_TITLE"
+
+          # Try to find an existing open milestone with that title.
+          existing=$(gh api "repos/$REPO/milestones" --jq \
+            ".[] | select(.title == \"$MILESTONE_TITLE\") | .number" 2>/dev/null | head -1)
+
+          if [[ -n "$existing" ]]; then
+            echo "Reusing existing milestone #$existing ($MILESTONE_TITLE)."
+            milestone="$existing"
+          else
+            echo "Creating new milestone $MILESTONE_TITLE."
+            milestone=$(gh api --method POST "repos/$REPO/milestones" \
+              --field title="$MILESTONE_TITLE" --jq '.number')
+          fi
+
+          gh api --method PATCH "repos/$REPO/pulls/$PR_NUMBER" \
+            --input - <<< "{\"milestone\": $milestone}"
+          echo "Milestone $milestone ($MILESTONE_TITLE) set on PR #$PR_NUMBER."
