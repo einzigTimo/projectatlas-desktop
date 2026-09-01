@@ -112,7 +112,7 @@ def self_test() -> None:
 
     fake_issues = {
         ("test-owner/test-repo", 11): {"milestone": {"title": "Version 0.2.3"}},
-        ("octo/example", 9): {"milestone": None},
+        ("octo/example", 9): {},
     }
     failures = verify_references(
         "test-owner/test-repo",
@@ -133,7 +133,12 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.self_test:
-        self_test()
+        if args.repo or args.pr > 0:
+            raise SystemExit("--self-test cannot be combined with --repo or --pr")
+        try:
+            self_test()
+        except AssertionError as exc:
+            raise SystemExit("PR issue milestone policy self-test failed") from exc
         print("PR issue milestone policy self-test passed")
         return 0
 
