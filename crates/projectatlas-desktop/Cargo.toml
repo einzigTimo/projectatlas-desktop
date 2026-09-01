@@ -25,19 +25,19 @@ blake3.workspace = true
 ignore.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tauri = { workspace = true, features = [] }
-tauri-plugin-dialog.workspace = true
-tauri-plugin-updater.workspace = true
-tauri-plugin-process.workspace = true
-tauri-plugin-shell.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-shell = "2"
 tiktoken.workspace = true
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
-tauri-build = { workspace = true, features = [] }
+tauri-build = { version = "2", features = [] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-minisign-verify.workspace = true
+minisign-verify = "0.2"
