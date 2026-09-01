@@ -84,7 +84,14 @@ impl AppState {
         let (registry, registry_blocked_reason) = match load() {
             Ok(registry) => (registry, None),
             Err(error @ AppError::Registry(_)) => {
-                (RegistryFile::default(), Some(error.to_string()))
+                // Extract the inner message only, not error.to_string(), to avoid the
+                // "Projekt-Registrierung fehlgeschlagen:" prefix appearing twice when
+                // registry_result() wraps this into another AppError::Registry later.
+                let inner_msg = match &error {
+                    AppError::Registry(msg) => msg.clone(),
+                    _ => error.to_string(),
+                };
+                (RegistryFile::default(), Some(inner_msg))
             }
             Err(_) => (RegistryFile::default(), None),
         };
