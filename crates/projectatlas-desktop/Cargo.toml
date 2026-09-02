@@ -40,4 +40,4 @@ workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-minisign-verify = "0.2.5"
+minisign-verify.workspace = true
