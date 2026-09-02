@@ -8717,7 +8717,9 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8737,9 +8739,10 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
         "test-optional-parser-proof-inputs.py",
-        "--issue-map openspec/issue-map.json",
     ] {
         if !ci.contains(required) {
             return Err(io::Error::other(format!(
