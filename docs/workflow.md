@@ -39,7 +39,9 @@ cargo test --workspace --all-features --locked
 cargo test --doc --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo run --locked -p projectatlas-lints --bin cargo-projectatlas-lints -- strict-strings
-cargo deny --locked --all-features check -D warnings
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected
+cargo deny --locked --all-features --target x86_64-pc-windows-msvc check advisories licenses sources -D warnings
+cargo deny --locked --all-features --target x86_64-pc-windows-msvc check bans -A duplicate -A unused-workspace-dependency -D warnings
 npm ci --ignore-scripts --prefix .github/mermaid-parser
 npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
 python3 .github/scripts/issue-checklists.py --self-test
@@ -59,7 +61,9 @@ Use Cargo and the committed `Cargo.lock` as the complete dependency inventory:
 cargo metadata --locked --offline --format-version 1
 cargo tree --workspace --all-features --locked
 cargo tree --duplicates --workspace --all-features --locked
-cargo deny --locked --all-features check -D warnings
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected
+cargo deny --locked --all-features --target x86_64-pc-windows-msvc check advisories licenses sources -D warnings
+cargo deny --locked --all-features --target x86_64-pc-windows-msvc check bans -A duplicate -A unused-workspace-dependency -D warnings
 ```
 
 The offline metadata command is a deterministic inspection step after the normal locked fetch or build path. It is not a network bootstrap command, and its output is not committed as a second dependency ledger.

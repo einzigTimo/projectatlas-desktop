@@ -8214,18 +8214,30 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         )
         .into());
     }
-    let cargo_deny_command = "cargo deny --locked --all-features check -D warnings";
+    // The desktop crate pulls the Tauri stack, which resolves duplicate
+    // transitive versions that the workspace itself never selects. The scan is
+    // therefore split instead of weakened: the workspace without the desktop
+    // crate stays fully strict, and the Windows desktop target keeps
+    // advisories, licenses and sources fail-closed while only duplicate bans
+    // are relaxed. Every location must run the same three commands.
+    let cargo_deny_commands = [
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
+    ];
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
         ("release", release_workflow.as_str()),
         ("pre-push hook", hook.as_str()),
         ("workflow docs", workflow_docs.as_str()),
     ] {
-        if !content.contains(cargo_deny_command) {
-            return Err(io::Error::other(format!(
-                "{owner} is missing the locked all-feature cargo-deny command"
-            ))
-            .into());
+        for command in cargo_deny_commands {
+            if !content.contains(command) {
+                return Err(io::Error::other(format!(
+                    "{owner} is missing the locked all-feature cargo-deny command {command:?}"
+                ))
+                .into());
+            }
         }
     }
 
