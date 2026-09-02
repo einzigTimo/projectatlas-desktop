@@ -66,6 +66,16 @@ jobs:
             exit 1
           fi
 
+      # /**
+      #  * Purpose: Validate the checklist tooling itself in this desktop fork.
+      #  *
+      #  * The repository-wide OpenSpec run is deliberately not part of this job.
+      #  * Every entry in openspec/issue-map.json points at an issue of the
+      #  * upstream repository styler-ai/ProjectAtlas (#276-#473), and none of
+      #  * those numbers exist here, so the run could never pass in this fork.
+      #  * Per-issue validation still happens in 00-IssueOps, which scopes the
+      #  * same script to the issue at hand through --planned-issue.
+      #  */
       - name: Issue checklist check
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
@@ -75,10 +85,6 @@ jobs:
           npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
           python3 .github/scripts/issue-checklists.py --self-test
           python3 .github/scripts/test-optional-parser-proof-inputs.py
-          python3 .github/scripts/issue-checklists.py \
-            --repo "$GITHUB_REPOSITORY" \
-            --root . \
-            --issue-map openspec/issue-map.json
 
       - name: Manual-only full benchmark policy
         run: python3 .github/scripts/verify-manual-benchmark-policy.py
