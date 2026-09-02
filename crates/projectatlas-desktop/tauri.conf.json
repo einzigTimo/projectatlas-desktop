@@ -55,6 +55,7 @@
         "type": "downloadBootstrapper"
       },
       "nsis": {
+        "installMode": "currentUser",
         "languages": ["German"],
         "displayLanguageSelector": false
       }

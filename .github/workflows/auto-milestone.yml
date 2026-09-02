@@ -1,0 +1,65 @@
+# Purpose: Assign the milestone of a referenced issue to the PR automatically.
+# This ensures PRs targeting main/dev always have a milestone set, satisfying
+# the "Issue reference check" gate in ci.yml.
+
+name: 02-Auto-Milestone
+
+on:
+  pull_request:
+    branches: [main, dev]
+    types: [opened, synchronize, edited, reopened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  set-milestone:
+    name: set-milestone
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign milestone from referenced issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          PR_MILESTONE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
+          if [[ -n "$PR_MILESTONE" ]]; then
+            echo "PR already has milestone $PR_MILESTONE – nothing to do."
+            exit 0
+          fi
+
+          PR_TITLE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.title // ""')"
+          PR_BODY="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""')"
+          text="$PR_TITLE $PR_BODY"
+
+          # Extract all #NNN references from title + body, excluding the PR itself
+          issue_refs=$(grep -oP '(?<!\w)#\K[0-9]+' <<< "$text" | sort -un | grep -xv "$PR_NUMBER")
+          if [[ -z "$issue_refs" ]]; then
+            echo "No issue references found in PR title/body."
+            exit 0
+          fi
+
+          for num in $issue_refs; do
+            api_out=$(gh api "repos/$REPO/issues/$num" --jq '.milestone.number // ""' 2>&1) && api_ok=true || api_ok=false
+            if [[ "$api_ok" == "false" ]]; then
+              if echo "$api_out" | grep -q "HTTP 404\|Not Found"; then
+                echo "Issue/PR #$num not found, skipping."
+              else
+                echo "Warning: unexpected error for #$num: $api_out" >&2
+              fi
+              continue
+            fi
+            milestone="$api_out"
+            if [[ -n "$milestone" ]]; then
+              echo "Found milestone $milestone from issue/PR #$num – assigning to PR #$PR_NUMBER."
+              gh api --method PATCH "repos/$REPO/pulls/$PR_NUMBER" \
+                --input - <<< "{\"milestone\": $milestone}"
+              echo "Milestone set."
+              exit 0
+            fi
+          done
+
+          echo "No milestone found in any referenced issue/PR."

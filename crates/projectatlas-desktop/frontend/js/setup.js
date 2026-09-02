@@ -19,6 +19,12 @@ window.PAD.setup = (function () {
   let projectId = null;
   /** Display name of that project, for the heading. */
   let projectName = null;
+  /** Root of the registered project currently shown by the dashboard. */
+  let projectRoot = null;
+  /** Folder selected for a new first-run initialization. */
+  let selectedPath = null;
+  /** Callback owned by main.js for refreshing the sidebar after a successful init. */
+  let onProjectConnected = function () { return Promise.resolve(); };
   /** Whether a detection or connect call is currently running. */
   let busy = false;
   /** Whether the overlay is open, so background changes can refresh it. */
@@ -54,13 +60,18 @@ window.PAD.setup = (function () {
     return node;
   }
 
-  /** Enable or disable the two action buttons. */
+  /** Enable or disable the folder picker and setup action buttons. */
   function setBusy(next) {
     busy = next;
+    const choose = el("setupChooseFolderBtn");
     const connect = el("setupConnectBtn");
     const all = el("setupConnectAllBtn");
-    if (connect) connect.disabled = busy || !projectId;
-    if (all) all.disabled = busy;
+    if (choose) choose.disabled = busy;
+    if (connect) {
+      connect.disabled = busy || (!selectedPath && !projectId);
+      connect.textContent = selectedPath ? "Ordner einrichten" : "Dieses Projekt verbinden";
+    }
+    if (all) all.disabled = busy || !projectId || !!selectedPath;
   }
 
   /** Turn a backend error into a readable sentence. */
@@ -115,7 +126,14 @@ window.PAD.setup = (function () {
 
   /** Show the heading for the currently selected project. */
   function renderProjectHeading() {
-    setText("setupProject", projectName || "kein Projekt gewählt");
+    const root = selectedPath || projectRoot;
+    setText("setupProject", root || projectName || "noch kein Ordner gewählt");
+    setText(
+      "setupProjectMode",
+      selectedPath
+        ? "Dieser Ordner wird jetzt lokal eingerichtet und danach automatisch ausgewählt."
+        : (projectId ? "Bereits registriertes Projekt" : "Für den Erststart bitte einen Ordner wählen.")
+    );
   }
 
   /** Load tool detection and the connection state of the selected project. */
@@ -126,7 +144,7 @@ window.PAD.setup = (function () {
     setText("setupState", "Prüfe …");
 
     const detect = api.detectAiTools();
-    const connection = projectId
+    const connection = projectId && !selectedPath
       ? api.getProjectConnection(projectId)
       : Promise.resolve(null);
 
@@ -136,8 +154,13 @@ window.PAD.setup = (function () {
         const state = results[1];
         renderFiles(state ? state.configFiles : []);
 
-        if (!projectId) {
-          setText("setupState", "Links ein Projekt wählen, um es zu verbinden.");
+        if (selectedPath) {
+          setText(
+            "setupState",
+            "Ordner gewählt. „Ordner einrichten“ legt dort ProjectAtlas-Konfiguration und lokalen Index an."
+          );
+        } else if (!projectId) {
+          setText("setupState", "Wähle einen Projektordner, um ProjectAtlas erstmals einzurichten.");
         } else if (state && state.initialized) {
           setText(
             "setupState",
@@ -154,6 +177,44 @@ window.PAD.setup = (function () {
       .catch(function (error) {
         setText("setupState", message(error));
         setBusy(false);
+      });
+  }
+
+  /** Show or hide the reminder that already-running AI hosts must reload MCP config. */
+  function showRestartHint(show) {
+    const hint = el("setupRestartHint");
+    if (hint) hint.hidden = !show;
+  }
+
+  /** Let the user select the folder that should receive its first local Atlas setup. */
+  function chooseFolder() {
+    if (busy) return Promise.resolve(null);
+    setBusy(true);
+    setText("setupState", "Öffne Ordnerauswahl …");
+    return api
+      .pickFolder()
+      .then(function (folder) {
+        if (!folder) {
+          setText("setupState", selectedPath ? "Ordnerauswahl abgebrochen; die vorige Auswahl bleibt erhalten." : "Kein Ordner gewählt.");
+          return null;
+        }
+        selectedPath = folder;
+        showRestartHint(false);
+        renderFiles([]);
+        renderProjectHeading();
+        setText(
+          "setupState",
+          "Ordner gewählt. Die Einrichtung bleibt lokal und startet erst mit „Ordner einrichten“."
+        );
+        return folder;
+      })
+      .catch(function (error) {
+        setText("setupState", message(error));
+        return null;
+      })
+      .then(function (folder) {
+        setBusy(false);
+        return folder;
       });
   }
 
@@ -250,6 +311,7 @@ window.PAD.setup = (function () {
               " verbunden. Nicht geklappt hat:\n\n" + lines.join("\n\n")
           );
         }
+        showRestartHint(outcomes.some(function (outcome) { return outcome.succeeded; }));
         stopActivity();
         setBusy(false);
         if (projectId) {
@@ -265,22 +327,38 @@ window.PAD.setup = (function () {
       });
   }
 
-  /** Run `projectatlas init` in the selected project through the bundled binary. */
+  /** Run `projectatlas init` for either a chosen new folder or the active project. */
   function connect() {
-    if (busy || !projectId) return;
+    if (busy || (!selectedPath && !projectId)) return;
+    const newPath = selectedPath;
     setBusy(true);
     clearProgress();
     startActivity();
-    setText("setupState", "Verbinde …" + scanHint(false));
+    showRestartHint(false);
+    setText("setupState", (newPath ? "Richte Ordner ein …" : "Verbinde …") + scanHint(false));
 
-    api
-      .connectProject(projectId, wantsScan())
+    const request = newPath
+      ? api.connectProjectPath(newPath, wantsScan())
+      : api.connectProject(projectId, wantsScan());
+
+    request
       .then(function (outcome) {
         stopActivity();
         renderFiles(outcome.configFiles);
         const detail = outcome.details ? "\n\n" + outcome.details : "";
         setText("setupState", outcome.message + detail);
-        setBusy(false);
+        if (!outcome.succeeded) {
+          setBusy(false);
+          return null;
+        }
+        showRestartHint(true);
+        selectedPath = null;
+        return Promise.resolve(onProjectConnected(outcome))
+          .then(function () {
+            renderProjectHeading();
+            setBusy(false);
+            return outcome;
+          });
       })
       .catch(function (error) {
         stopActivity();
@@ -298,18 +376,46 @@ window.PAD.setup = (function () {
     refresh();
   }
 
+  /** Open the shared setup panel and immediately start its visible folder picker. */
+  function openForFolder() {
+    selectedPath = null;
+    showRestartHint(false);
+    const overlay = el("setupOverlay");
+    if (!overlay) return Promise.resolve(null);
+    overlay.hidden = false;
+    open_ = true;
+    renderProjectHeading();
+    return chooseFolder().then(function (folder) {
+      refresh();
+      return folder;
+    });
+  }
+
+  /** Open the setup panel for a machine that has no registered projects yet. */
+  function openFirstRun() {
+    selectedPath = null;
+    showRestartHint(false);
+    open();
+  }
+
   /** Hide the setup panel. */
   function close() {
+    if (busy) return;
     const overlay = el("setupOverlay");
     if (overlay) overlay.hidden = true;
     open_ = false;
+    selectedPath = null;
+    showRestartHint(false);
+    renderProjectHeading();
+    setBusy(false);
   }
 
   /** Record which project the dashboard shows, refreshing the panel when it is open. */
-  function setProject(id, name) {
-    if (id === projectId && name === projectName) return;
+  function setProject(id, name, root) {
+    if (id === projectId && name === projectName && root === projectRoot) return;
     projectId = id || null;
     projectName = name || null;
+    projectRoot = root || null;
     if (open_) {
       refresh();
     } else {
@@ -317,14 +423,19 @@ window.PAD.setup = (function () {
     }
   }
 
-  /** Wire the sidebar button, the close button, and the two actions. */
-  function wire() {
+  /** Wire the sidebar button, the close button, and the setup actions. */
+  function wire(options) {
+    if (options && typeof options.onProjectConnected === "function") {
+      onProjectConnected = options.onProjectConnected;
+    }
     const button = el("btnSetup");
     if (button) button.addEventListener("click", open);
     const closeBtn = el("setupCloseBtn");
     if (closeBtn) closeBtn.addEventListener("click", close);
     const connectBtn = el("setupConnectBtn");
     if (connectBtn) connectBtn.addEventListener("click", connect);
+    const chooseBtn = el("setupChooseFolderBtn");
+    if (chooseBtn) chooseBtn.addEventListener("click", chooseFolder);
     const connectAllBtn = el("setupConnectAllBtn");
     if (connectAllBtn) connectAllBtn.addEventListener("click", connectAll);
 
@@ -347,6 +458,8 @@ window.PAD.setup = (function () {
   return {
     wire: wire,
     open: open,
+    openForFolder: openForFolder,
+    openFirstRun: openFirstRun,
     close: close,
     setProject: setProject
   };
