@@ -5,6 +5,7 @@
 //! telemetry arrived" without re-rendering anything: only a changed fingerprint
 //! emits an event, and only then does the frontend patch the affected text nodes.
 
+use crate::app::error::{AppError, AppResult};
 use crate::app::registry::{ProjectStatus, RegisteredProject, RegistryFile, load};
 use crate::app::view::{ActivityView, OverviewView, TrendView};
 use projectatlas_core::telemetry::TokenCalibrationOverview;
@@ -40,6 +41,10 @@ struct ProjectFingerprints {
 struct Inner {
     /// Known projects, mirrored from disk.
     registry: RegistryFile,
+    /// The exact error message from [`load()`] when the registry file cannot be
+    /// safely overwritten (e.g. incompatible version, unknown migration path).
+    /// `None` for recoverable errors such as ordinary parse / IO failures.
+    registry_blocked_reason: Option<String>,
     /// Id of the project currently shown in the content area.
     active_project_id: Option<String>,
     /// Calendar grouping the trend panel currently displays.
@@ -73,11 +78,28 @@ pub(crate) struct ProjectBadge {
 impl AppState {
     /// Build the state from the on-disk registry, starting empty when none exists.
     pub(crate) fn load_or_default() -> Self {
-        let registry = load().unwrap_or_default();
+        // Only a version-incompatible registry blocks recovery commands such as
+        // rescan or add_project_manual.  Ordinary parse / IO errors leave the
+        // in-memory registry as the default so those commands can repair the file.
+        let (registry, registry_blocked_reason) = match load() {
+            Ok(registry) => (registry, None),
+            Err(error @ AppError::Registry(_)) => {
+                // Extract the inner message only, not error.to_string(), to avoid the
+                // "Projekt-Registrierung fehlgeschlagen:" prefix appearing twice when
+                // registry_result() wraps this into another AppError::Registry later.
+                let inner_msg = match &error {
+                    AppError::Registry(msg) => msg.clone(),
+                    _ => error.to_string(),
+                };
+                (RegistryFile::default(), Some(inner_msg))
+            }
+            Err(_) => (RegistryFile::default(), None),
+        };
         let active_project_id = preferred_project(&registry.projects);
         Self {
             inner: Mutex::new(Inner {
                 registry,
+                registry_blocked_reason,
                 active_project_id,
                 trend_window: DEFAULT_TREND_WINDOW.to_string(),
                 fingerprints: HashMap::new(),
@@ -91,6 +113,27 @@ impl AppState {
         self.inner.lock().await.registry.clone()
     }
 
+    /// Return the registry only when it is safe to modify.
+    ///
+    /// Blocks when the on-disk file has an incompatible or unrecognised schema
+    /// version — overwriting it would silently lose unknown fields and corrupt the
+    /// user's data.  The concrete error from [`load()`] is returned so the message
+    /// accurately describes the actual problem (invalid version, unknown migration
+    /// path, etc.) rather than always claiming the file is from a newer app version.
+    ///
+    /// Ordinary parse or IO errors do NOT block: the in-memory default registry is
+    /// returned so commands such as `rescan_projects` and `add_project_manual` can
+    /// restore the file.
+    pub(crate) async fn registry_result(&self) -> AppResult<RegistryFile> {
+        let inner = self.inner.lock().await;
+        match &inner.registry_blocked_reason {
+            Some(reason) => Err(AppError::Registry(format!(
+                "Registrierungsdatei inkompatibel, schreibende Befehle werden blockiert: {reason}"
+            ))),
+            None => Ok(inner.registry.clone()),
+        }
+    }
+
     /// Replace the in-memory registry after a scan or manual change.
     pub(crate) async fn set_registry(&self, registry: RegistryFile) {
         let mut inner = self.inner.lock().await;
@@ -102,6 +145,7 @@ impl AppState {
             inner.active_project_id = preferred_project(&registry.projects);
         }
         inner.registry = registry;
+        inner.registry_blocked_reason = None;
     }
 
     /// Return the id of the project currently displayed, if any.

@@ -2368,9 +2368,9 @@ fn linux_loader_dependency_removal(
     let section_flags = dynamic_section.sh_flags(endian);
     if dynamic_section.sh_addr(endian) != dynamic_address
         || dynamic_section.sh_entsize(endian) != u64::try_from(ELF64_DYNAMIC_ENTRY_BYTES)?
-        || section_flags & u64::from(object::elf::SHF_ALLOC) == 0
-        || section_flags & u64::from(object::elf::SHF_WRITE) == 0
-        || section_flags & u64::from(object::elf::SHF_EXECINSTR) != 0
+        || section_flags & object::elf::SHF_ALLOC == object::elf::SectionFlags(0)
+        || section_flags & object::elf::SHF_WRITE == object::elf::SectionFlags(0)
+        || section_flags & object::elf::SHF_EXECINSTR != object::elf::SectionFlags(0)
     {
         return Err(invalid(
             "parser worker ELF dynamic section has an unsupported load-image shape",
@@ -2401,9 +2401,9 @@ fn linux_loader_dependency_removal(
             || dynamic_file_end > load_file_end
             || dynamic_memory_end > load_memory_end
             || load_address.checked_add(dynamic_offset - load_offset) != Some(dynamic_address)
-            || flags & object::elf::PF_R == 0
-            || flags & object::elf::PF_W == 0
-            || flags & object::elf::PF_X != 0
+            || flags & object::elf::PF_R == object::elf::ProgramFlags(0)
+            || flags & object::elf::PF_W == object::elf::ProgramFlags(0)
+            || flags & object::elf::PF_X != object::elf::ProgramFlags(0)
         {
             continue;
         }
@@ -2694,13 +2694,22 @@ fn inspect_executable_exports(
     platform: PackPlatform,
     role: &str,
 ) -> ToolResult<Vec<String>> {
-    let exports = object.exports()?;
+    let exports = object
+        .exports()?
+        .collect::<object::read::Result<Vec<_>>>()?;
     if exports.len() > MAX_EXPORTS_PER_WORKER {
         return Err(invalid(format!("{role} exports exceed the audit bound")));
     }
     let mut normalized = Vec::with_capacity(exports.len());
     for export in exports {
-        let symbol = normalize_export(std::str::from_utf8(export.name())?, platform).to_owned();
+        let export_identity = export.name();
+        let export_name = export_identity.name().ok_or_else(|| {
+            invalid(format!(
+                "{role} export by ordinal cannot be policy-audited: {:?}",
+                export_identity
+            ))
+        })?;
+        let symbol = normalize_export(std::str::from_utf8(export_name)?, platform).to_owned();
         validate_native_audit_name(&symbol, "executable export")?;
         if symbol.starts_with(TREE_SITTER_SYMBOL_PREFIX) {
             return Err(invalid(format!(
@@ -2829,7 +2838,8 @@ fn inspect_clr_runtime_header(object: &NativeObject<'_>) -> ToolResult<(u32, u32
         .map_err(|()| invalid("runtime-containment broker CLR header is truncated"))?;
     let (metadata_rva, metadata_size) = header.meta_data.address_range();
     if header.cb.get(LE) != expected_size
-        || header.flags.get(LE) & object::pe::COMIMAGE_FLAGS_NATIVE_ENTRYPOINT != 0
+        || header.flags.get(LE) & object::pe::COMIMAGE_FLAGS_NATIVE_ENTRYPOINT
+            != object::pe::CorFlags(0)
         || header.entry_point_token_or_rva.get(LE) == 0
         || metadata_rva == 0
         || metadata_size == 0
@@ -2870,7 +2880,9 @@ fn validate_exports(
     expected: &str,
     platform: PackPlatform,
 ) -> ToolResult<()> {
-    let exports = object.exports()?;
+    let exports = object
+        .exports()?
+        .collect::<object::read::Result<Vec<_>>>()?;
     if exports.len() > MAX_EXPORTS_PER_LIBRARY {
         return Err(invalid("native library exports exceed the audit bound"));
     }
@@ -2883,7 +2895,14 @@ fn validate_exports(
         .collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
     for export in exports {
-        let raw = std::str::from_utf8(export.name())?;
+        let export_identity = export.name();
+        let export_name = export_identity.name().ok_or_else(|| {
+            invalid(format!(
+                "native export by ordinal cannot be policy-audited for {expected:?}: {:?}",
+                export_identity
+            ))
+        })?;
+        let raw = std::str::from_utf8(export_name)?;
         let normalized = normalize_export(raw, platform);
         validate_native_audit_name(normalized, "native export")?;
         if !normalized.starts_with("tree_sitter_") {
@@ -2913,13 +2932,22 @@ fn inspect_imports(
     object: &NativeObject<'_>,
     platform: PackPlatform,
 ) -> ToolResult<(BTreeSet<String>, BTreeSet<String>)> {
-    let imports = object.imports()?;
+    let imports = object
+        .imports()?
+        .collect::<object::read::Result<Vec<_>>>()?;
     if imports.len() > MAX_IMPORTS_PER_LIBRARY {
         return Err(invalid("native imports exceed the audit bound"));
     }
     let mut symbols = BTreeSet::new();
-    for import in &imports {
-        let symbol = std::str::from_utf8(import.name())?;
+    for import in imports.iter() {
+        let import_identity = import.name();
+        let import_name = import_identity.name().ok_or_else(|| {
+            invalid(format!(
+                "native import by ordinal cannot be policy-audited: {:?}",
+                import_identity
+            ))
+        })?;
+        let symbol = std::str::from_utf8(import_name)?;
         let normalized = normalize_import_symbol(symbol);
         validate_native_audit_name(&normalized, "native import")?;
         symbols.insert(normalized);
@@ -2929,8 +2957,8 @@ fn inspect_imports(
         NativeObject::Elf64(file) => elf_needed_libraries(file)?,
         NativeObject::MachO32(file) => macho_load_libraries(file)?,
         NativeObject::MachO64(file) => macho_load_libraries(file)?,
-        NativeObject::Pe32(file) => pe_import_libraries(file, &imports, &mut symbols)?,
-        NativeObject::Pe64(file) => pe_import_libraries(file, &imports, &mut symbols)?,
+        NativeObject::Pe32(file) => pe_import_libraries(file, imports.as_slice(), &mut symbols)?,
+        NativeObject::Pe64(file) => pe_import_libraries(file, imports.as_slice(), &mut symbols)?,
         _ => return Err(invalid("unsupported native object format")),
     };
     if symbols.len() > MAX_IMPORTS_PER_LIBRARY {

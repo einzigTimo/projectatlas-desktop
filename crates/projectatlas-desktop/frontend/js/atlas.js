@@ -18,6 +18,7 @@ window.PAD.atlas = (function () {
   "use strict";
 
   const fmt = window.PAD.format;
+  const api = window.PAD.api;
 
   const NAMESPACE = "http://www.w3.org/2000/svg";
   /** Node colors, cycling like atlas_cluster_color in token_tui.rs. */
@@ -40,6 +41,42 @@ window.PAD.atlas = (function () {
   const CLICK_SLOP = 3;
   /** Neighbours listed in the detail box before the rest is summed up. */
   const MAX_NEIGHBOR_CHIPS = 12;
+  /** Top files shown above the compact graph. */
+  const MAX_RELATION_SUMMARY = 8;
+
+  /** Return whether one repository path can expose Markdown heading selectors. */
+  function isMarkdownPath(path) {
+    return /\.(md|mdx|markdown)$/i.test(path || "");
+  }
+
+  /** Copy text with the modern clipboard API and a WebView-compatible fallback. */
+  function copyText(text) {
+    function fallback() {
+      return new Promise(function (resolve, reject) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.readOnly = true;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        let copied = false;
+        try {
+          copied = document.execCommand("copy");
+        } catch (_error) {
+          copied = false;
+        }
+        textarea.remove();
+        if (copied) resolve();
+        else reject(new Error("Kopieren nicht möglich."));
+      });
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    return fallback();
+  }
 
   /** Seeded pseudo-random generator, so a graph always starts from the same spot. */
   function seeded(seed) {
@@ -190,9 +227,11 @@ window.PAD.atlas = (function () {
      The dashboard needs the same picture twice — small in the overview column and
      large in the expanded window — so the whole renderer is created per target
      instead of reaching for one fixed set of element ids. */
-  function createSurface(wrapId, detailId, footId) {
+  function createSurface(wrapId, detailId, footId, relationsId) {
     /** Everything about the currently drawn graph, or null while nothing is drawn. */
     let map = null;
+    /** Invalidates stale relation/heading responses after another selection. */
+    let relationRequest = 0;
 
     /** Write the current pan and zoom onto the scene group. */
     function applyTransform() {
@@ -270,27 +309,311 @@ window.PAD.atlas = (function () {
 
     /** Empty the detail box below the map. */
     function clearDetail() {
+      relationRequest += 1;
       const box = el(detailId);
       if (!box) return;
       box.textContent = "";
       box.hidden = true;
     }
 
-    /** Describe the selected node below the map. */
-    function showDetail(position) {
-      const box = el(detailId);
-      if (!box) return;
-      const node = map.placed[position].node;
-      const neighbors = neighborsOf(position);
-      box.textContent = "";
-
+    /** Add the standard close control to a map detail box. */
+    function appendDetailClose(box, handler) {
       const close = document.createElement("button");
       close.type = "button";
       close.className = "atlas-detail-close";
       close.title = "Auswahl aufheben";
       close.textContent = "×";
-      close.addEventListener("click", function () { select(null); });
+      close.addEventListener("click", handler);
       box.appendChild(close);
+    }
+
+    /** Translate the backend's direction marker into a compact German label. */
+    function directionLabel(direction) {
+      return String(direction || "").toLowerCase() === "outgoing"
+        ? "→ ausgehend"
+        : "← eingehend";
+    }
+
+    /** Render an exact Markdown heading selector picker into a relation detail. */
+    function appendHeadingPicker(box, projectId, filePath, request) {
+      if (!isMarkdownPath(filePath)) return;
+
+      const section = document.createElement("div");
+      section.className = "heading-picker";
+      const loading = document.createElement("div");
+      loading.className = "heading-picker-note";
+      loading.textContent = "Abschnittsziele werden geladen …";
+      section.appendChild(loading);
+      box.appendChild(section);
+
+      api
+        .getFileHeadings(projectId, filePath)
+        .then(function (headings) {
+          if (request !== relationRequest || projectId !== lastProjectId) return;
+          section.textContent = "";
+
+          const title = document.createElement("div");
+          title.className = "heading-picker-title";
+          title.textContent = "Exaktes Abschnittsziel";
+          section.appendChild(title);
+
+          if (!headings || headings.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "heading-picker-note";
+            empty.textContent = "Keine Markdown-Überschriften im Index gefunden.";
+            section.appendChild(empty);
+            return;
+          }
+
+          const controls = document.createElement("div");
+          controls.className = "heading-picker-controls";
+          const picker = document.createElement("select");
+          picker.title = "Dokumentabschnitt auswählen";
+          headings.forEach(function (heading) {
+            const option = document.createElement("option");
+            option.value = heading.selector || (filePath + "#" + heading.anchor);
+            const indent = new Array(Math.max(1, heading.level || 1)).join("· ");
+            option.textContent =
+              indent + heading.text + (heading.line ? " · Zeile " + fmt.int(heading.line) : "");
+            picker.appendChild(option);
+          });
+
+          const copy = document.createElement("button");
+          copy.type = "button";
+          copy.textContent = "Selektor kopieren";
+          const status = document.createElement("span");
+          status.className = "heading-copy-status";
+          status.setAttribute("aria-live", "polite");
+
+          copy.addEventListener("click", function () {
+            copy.disabled = true;
+            copyText(picker.value)
+              .then(function () {
+                status.textContent = "Selektor kopiert.";
+                status.classList.remove("error");
+              })
+              .catch(function () {
+                status.textContent = "Kopieren nicht möglich.";
+                status.classList.add("error");
+              })
+              .then(function () {
+                copy.disabled = false;
+                window.setTimeout(function () {
+                  if (request === relationRequest) status.textContent = "";
+                }, 2200);
+              });
+          });
+
+          controls.appendChild(picker);
+          controls.appendChild(copy);
+          section.appendChild(controls);
+          section.appendChild(status);
+        })
+        .catch(function () {
+          if (request !== relationRequest || projectId !== lastProjectId) return;
+          loading.textContent = "Abschnittsziele konnten nicht geladen werden.";
+          loading.classList.add("error");
+        });
+    }
+
+    /** Append one incoming or outgoing file relation. */
+    function appendFileRelation(host, entry, fallbackDirection, selectedPath) {
+      const row = document.createElement("div");
+      row.className = "file-relation-row";
+
+      const direction = document.createElement("span");
+      direction.className = "file-relation-direction";
+      direction.textContent = directionLabel(entry.direction || fallbackDirection);
+
+      const relation = document.createElement("span");
+      relation.className = "file-relation-kind";
+      relation.textContent = entry.relation || "Relation";
+
+      let neighbor;
+      const canDrillDown =
+        String(entry.entityKind || "").toLowerCase() === "file" &&
+        entry.path && entry.path !== selectedPath;
+      if (canDrillDown) {
+        neighbor = document.createElement("button");
+        neighbor.type = "button";
+        neighbor.title = entry.path;
+        neighbor.addEventListener("click", function () {
+          showFileRelations(entry.path, entry.label || entry.path);
+        });
+      } else {
+        neighbor = document.createElement("span");
+        neighbor.title = entry.path || "";
+      }
+      neighbor.className = "file-relation-neighbor selectable";
+      neighbor.textContent = entry.label || entry.path || "Unbekannter Nachbar";
+
+      row.appendChild(direction);
+      row.appendChild(relation);
+      row.appendChild(neighbor);
+      host.appendChild(row);
+    }
+
+    /** Render the fetched relation page for one repository file. */
+    function renderFileRelations(box, data, fallbackPath, projectId, request) {
+      const filePath = (data && data.path) || fallbackPath;
+      const incoming = (data && data.incoming) || [];
+      const outgoing = (data && data.outgoing) || [];
+
+      const name = document.createElement("div");
+      name.className = "name selectable";
+      name.textContent = filePath;
+      box.appendChild(name);
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent =
+        fmt.int(incoming.length) + " eingehend · " +
+        fmt.int(outgoing.length) + " ausgehend" +
+        (data && data.truncated ? " · begrenzter Ausschnitt" : "");
+      box.appendChild(meta);
+
+      const relations = document.createElement("div");
+      relations.className = "file-relations";
+      outgoing.forEach(function (entry) {
+        appendFileRelation(relations, entry, "outgoing", filePath);
+      });
+      incoming.forEach(function (entry) {
+        appendFileRelation(relations, entry, "incoming", filePath);
+      });
+      if (incoming.length === 0 && outgoing.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "file-relations-empty";
+        empty.textContent = "Für diese Datei sind keine Relationen veröffentlicht.";
+        relations.appendChild(empty);
+      }
+      box.appendChild(relations);
+      appendHeadingPicker(box, projectId, filePath, request);
+    }
+
+    /** Fetch and show the directional relation page for one file. */
+    function showFileRelations(filePath, label) {
+      const box = el(detailId);
+      const projectId = lastProjectId;
+      if (!box || !projectId || !filePath) return;
+      const request = ++relationRequest;
+      box.textContent = "";
+      appendDetailClose(box, function () {
+        if (map) select(null);
+        else clearDetail();
+      });
+
+      const loading = document.createElement("div");
+      loading.className = "name selectable";
+      loading.textContent = label || filePath;
+      box.appendChild(loading);
+      const state = document.createElement("div");
+      state.className = "meta";
+      state.textContent = "Relationen werden geladen …";
+      box.appendChild(state);
+      box.hidden = false;
+
+      api
+        .getFileRelations(projectId, filePath)
+        .then(function (data) {
+          if (request !== relationRequest || projectId !== lastProjectId) return;
+          box.textContent = "";
+          appendDetailClose(box, function () {
+            if (map) select(null);
+            else clearDetail();
+          });
+          renderFileRelations(box, data, filePath, projectId, request);
+        })
+        .catch(function (error) {
+          if (request !== relationRequest || projectId !== lastProjectId) return;
+          state.textContent = error && error.message ? error.message : String(error);
+          state.classList.add("error");
+        });
+    }
+
+    /** Add an exact repository-path entry point for files outside the preview. */
+    function appendPathLookup(host) {
+      const form = document.createElement("form");
+      form.className = "atlas-path-lookup";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "docs/handbuch.md";
+      input.setAttribute("aria-label", "Repository-relativen Dateipfad öffnen");
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      const open = document.createElement("button");
+      open.type = "submit";
+      open.textContent = "Pfad öffnen";
+      form.appendChild(input);
+      form.appendChild(open);
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        const path = input.value.trim();
+        if (path) showFileRelations(path, path);
+      });
+      host.appendChild(form);
+    }
+
+    /** Render the compact top-file relation summary above the graph. */
+    function renderRelationSummary(view) {
+      const host = el(relationsId);
+      if (!host) return;
+      host.textContent = "";
+
+      const title = document.createElement("div");
+      title.className = "atlas-relations-title";
+      title.textContent = "Relationen · Top-Dateien";
+      host.appendChild(title);
+      appendPathLookup(host);
+
+      const entries = (view && view.relationSummary) || [];
+      if (entries.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "atlas-relations-empty";
+        empty.textContent = "Noch keine Dateirelationen verfügbar.";
+        host.appendChild(empty);
+        return;
+      }
+
+      entries.slice(0, MAX_RELATION_SUMMARY).forEach(function (entry) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "atlas-relation-summary";
+        button.title =
+          entry.path +
+          ((entry.relationKinds || []).length > 0
+            ? "\n" + entry.relationKinds.join(" · ")
+            : "");
+
+        const label = document.createElement("span");
+        label.className = "atlas-relation-label";
+        label.textContent = entry.label || entry.path;
+        const meta = document.createElement("span");
+        meta.className = "atlas-relation-meta";
+        meta.textContent = fmt.int(entry.incoming || 0) + " eingehend";
+        const kinds = document.createElement("span");
+        kinds.className = "atlas-relation-kinds";
+        kinds.textContent = (entry.relationKinds || []).join(" · ") || "Relation";
+
+        button.appendChild(label);
+        button.appendChild(meta);
+        button.appendChild(kinds);
+        button.addEventListener("click", function () {
+          showFileRelations(entry.path, entry.label || entry.path);
+        });
+        host.appendChild(button);
+      });
+    }
+
+    /** Describe the selected node below the map. */
+    function showDetail(position) {
+      const box = el(detailId);
+      if (!box) return;
+      relationRequest += 1;
+      const node = map.placed[position].node;
+      const neighbors = neighborsOf(position);
+      box.textContent = "";
+
+      appendDetailClose(box, function () { select(null); });
 
       const name = document.createElement("div");
       name.className = "name selectable";
@@ -301,10 +624,18 @@ window.PAD.atlas = (function () {
       meta.className = "meta";
       meta.textContent =
         (node.hub ? "Knotenpunkt" : "Knoten") +
+        (node.entityKind ? " · " + node.entityKind : "") +
         " · Gruppe " + fmt.int(node.cluster + 1) +
         " · " + fmt.int(neighbors.length) +
         (neighbors.length === 1 ? " Verbindung" : " Verbindungen");
       box.appendChild(meta);
+
+      if (node.path) {
+        const path = document.createElement("div");
+        path.className = "atlas-node-path selectable";
+        path.textContent = node.path;
+        box.appendChild(path);
+      }
 
       if (neighbors.length > 0) {
         const list = document.createElement("div");
@@ -324,6 +655,21 @@ window.PAD.atlas = (function () {
           list.appendChild(more);
         }
         box.appendChild(list);
+      }
+
+      if (String(node.entityKind || "").toLowerCase() === "file" && node.path) {
+        const actions = document.createElement("div");
+        actions.className = "atlas-detail-actions";
+        const relations = document.createElement("button");
+        relations.type = "button";
+        relations.textContent = isMarkdownPath(node.path)
+          ? "Dateirelationen & Abschnitte"
+          : "Dateirelationen";
+        relations.addEventListener("click", function () {
+          showFileRelations(node.path, node.label);
+        });
+        actions.appendChild(relations);
+        box.appendChild(actions);
       }
 
       box.hidden = false;
@@ -574,6 +920,7 @@ window.PAD.atlas = (function () {
       if (foot) foot.textContent = "";
       clearDetail();
       map = null;
+      renderRelationSummary(view);
 
       if (!view || !view.available) {
         placeholder(
@@ -591,6 +938,26 @@ window.PAD.atlas = (function () {
       renderFoot(view);
     }
 
+    /** Clear stale interactions while another project's graph is loading. */
+    function renderLoading() {
+      const wrap = el(wrapId);
+      const foot = el(footId);
+      const relations = el(relationsId);
+      if (!wrap) return;
+      wrap.textContent = "";
+      if (foot) foot.textContent = "";
+      if (relations) {
+        relations.textContent = "";
+        const note = document.createElement("div");
+        note.className = "atlas-relations-empty";
+        note.textContent = "Dateirelationen werden geladen …";
+        relations.appendChild(note);
+      }
+      clearDetail();
+      map = null;
+      placeholder(wrap, "Beziehungsgraph wird geladen …");
+    }
+
     /** Put pan and zoom back to the starting picture and drop the selection. */
     function reset() {
       if (!map) return;
@@ -603,25 +970,37 @@ window.PAD.atlas = (function () {
 
     return {
       render: render,
+      renderLoading: renderLoading,
       reset: reset,
       zoomIn: function () { zoomBy(ZOOM_STEP, null); },
       zoomOut: function () { zoomBy(1 / ZOOM_STEP, null); }
     };
   }
 
-  const small = createSurface("atlasWrap", "atlasDetail", "atlasFoot");
-  const large = createSurface("atlasBigWrap", "atlasBigDetail", "atlasBigFoot");
+  const small = createSurface("atlasWrap", "atlasDetail", "atlasFoot", "atlasRelations");
+  const large = createSurface("atlasBigWrap", "atlasBigDetail", "atlasBigFoot", "atlasBigRelations");
 
   /** Last view handed in, so the large window can be filled without a new fetch. */
   let lastView = null;
+  /** Active project owning the current map and every relation drilldown. */
+  let lastProjectId = null;
   /** Whether the large window is currently open. */
   let largeOpen = false;
 
   /** Draw one view; the large window follows along while it is open. */
-  function draw(view) {
+  function draw(view, projectId) {
     lastView = view || null;
+    lastProjectId = projectId || null;
     small.render(lastView);
     if (largeOpen) large.render(lastView);
+  }
+
+  /** Clear the previous project immediately and bind loading to the new id. */
+  function setLoading(projectId) {
+    lastView = null;
+    lastProjectId = projectId || null;
+    small.renderLoading();
+    if (largeOpen) large.renderLoading();
   }
 
   /** Open the large map window. */
@@ -671,6 +1050,7 @@ window.PAD.atlas = (function () {
 
   return {
     draw: draw,
+    setLoading: setLoading,
     wire: wire
   };
 })();
