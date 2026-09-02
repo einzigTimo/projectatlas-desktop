@@ -91,7 +91,8 @@ impl Default for RegistryFile {
 /// Return the default folder to auto-scan, derived from `%USERPROFILE%` at runtime.
 ///
 /// Never hardcode a concrete home-directory path in source: the `strict-strings`
-/// lint (`crates/projectatlas-lints`) forbids literal `C:\Users\...`-shaped paths.
+/// lint (`crates/projectatlas-lints`) forbids literal home-directory paths (for
+/// example `%USERPROFILE%\Projects` resolved to a concrete user folder).
 fn default_scan_root() -> Option<PathBuf> {
     env::var_os("USERPROFILE").map(|home| Path::new(&home).join("Projects"))
 }

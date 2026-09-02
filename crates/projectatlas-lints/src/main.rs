@@ -78,6 +78,7 @@ const E2E_ALLOWED_REPEATED_PATH_JOIN_LITERALS: &[&str] = &[
     ".cargo",
     ".github",
     ".gitignore",
+    ".mcp.json",
     ".purpose",
     "AppData",
     "Cargo.toml",

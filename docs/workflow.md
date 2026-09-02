@@ -130,7 +130,7 @@ Commit identity is provenance, not a general test invalidation key. After a comm
 - GitHub Actions runs Rust source, dependency, unit, E2E, documentation, and packaging checks. ProjectAtlas scan, purpose, parity, and lint maintenance run locally against the developer or agent's current source state, not against the hosted Actions checkout.
 - `projectatlas lint` checks purpose/header health, non-source declarations, and untracked files; it does not require or validate the optional compatibility TOON export.
 - `projectatlas lint --purpose-level low` is the default first-pass agent gate: duplicate and repeated temporary-folder findings fail, while missing/suggested purpose curation for folders plus high-impact files remains advisory. Use `projectatlas purpose queue` for the actionable curation list, `--purpose-level medium` when all source files must be agent-reviewed, and `--purpose-level strict` only when every indexed file and folder must be agent-reviewed.
-- PRs must reference a GitHub issue and have a milestone.
+- Pull requests into `main` or `dev` must reference a GitHub issue or pull request whose milestone is assigned.
 - Ordinary PRs may reference an issue without closing it; use `Closes #NNN` only when the issue's complete checklist is ready to close.
 - Active OpenSpec task lists must be mapped in `openspec/issue-map.json`, and their authoritative GitHub task sections must exactly mirror local text, order, ownership, and checked state.
 - CI can be run manually via `workflow_dispatch` when checks do not auto-trigger.
