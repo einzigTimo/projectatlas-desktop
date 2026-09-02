@@ -55,16 +55,57 @@ jobs:
         run: |
           PR_TITLE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.title // ""')"
           PR_BODY="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')"
-          PR_MILESTONE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.milestone.number // ""')"
           text="$PR_TITLE $PR_BODY"
           if ! [[ "$text" =~ (#[0-9]+|GH-[0-9]+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+) ]]; then
             echo "Pull request title or body must reference a GitHub issue." >&2
             exit 1
           fi
-          if [[ -z "$PR_MILESTONE" ]]; then
-            echo "Pull request must be assigned to a milestone." >&2
-            exit 1
-          fi
+          PR_REFERENCE_TEXT="$text" python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          text = os.environ["PR_REFERENCE_TEXT"]
+          pattern = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#([0-9]+)")
+
+          references: list[tuple[str, int]] = []
+          seen: set[tuple[str, int]] = set()
+          for match in pattern.finditer(text):
+              owner_repo = match.group(1) or repo
+              issue_number = int(match.group(2))
+              key = (owner_repo, issue_number)
+              if key not in seen:
+                  seen.add(key)
+                  references.append(key)
+
+          if not references:
+              print(
+                  "Pull request title or body must reference at least one GitHub issue/PR via #<number>.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          missing_milestone: list[str] = []
+          for owner_repo, issue_number in references:
+              payload = subprocess.check_output(
+                  ["gh", "api", f"repos/{owner_repo}/issues/{issue_number}"],
+                  text=True,
+              )
+              issue = json.loads(payload)
+              if issue.get("milestone") is None:
+                  missing_milestone.append(f"{owner_repo}#{issue_number}")
+
+          if missing_milestone:
+              joined = ", ".join(missing_milestone)
+              print(
+                  f"Referenced issues/PRs must be assigned to a milestone: {joined}",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY
 
       - name: Issue checklist check
         if: github.event_name == 'pull_request' || github.event_name == 'push'
