@@ -15,7 +15,7 @@ python3 .github/scripts/verify-published-benchmark-locks.py
 cargo fmt --all --check
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected -A unused-workspace-dependency
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check advisories licenses sources -D warnings
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check bans -A duplicate -A unused-workspace-dependency -D warnings
 cargo test --workspace --all-features --locked

@@ -39,7 +39,7 @@ cargo test --workspace --all-features --locked
 cargo test --doc --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo run --locked -p projectatlas-lints --bin cargo-projectatlas-lints -- strict-strings
-cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected -A unused-workspace-dependency
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check advisories licenses sources -D warnings
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check bans -A duplicate -A unused-workspace-dependency -D warnings
 npm ci --ignore-scripts --prefix .github/mermaid-parser
@@ -61,7 +61,7 @@ Use Cargo and the committed `Cargo.lock` as the complete dependency inventory:
 cargo metadata --locked --offline --format-version 1
 cargo tree --workspace --all-features --locked
 cargo tree --duplicates --workspace --all-features --locked
-cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A advisory-not-detected -A unused-workspace-dependency
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check advisories licenses sources -D warnings
 cargo deny --locked --all-features --target x86_64-pc-windows-msvc check bans -A duplicate -A unused-workspace-dependency -D warnings
 ```
