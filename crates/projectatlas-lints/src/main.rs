@@ -431,7 +431,8 @@ fn lint_private_path_source(
         .lines()
         .enumerate()
         .filter(|(_, line)| {
-            !line.contains(PRIVATE_PATH_FIXTURE_MARKER)
+            !private_path_line_is_exempt(relative_path, line)
+                && !line.contains(PRIVATE_PATH_FIXTURE_MARKER)
                 && rules.iter().any(|rule| rule.is_match(line))
         })
         .map(|(line, _)| StringLiteralViolation {
@@ -443,6 +444,11 @@ fn lint_private_path_source(
             description: "Machine-specific paths must use a portable placeholder or derived path.",
         })
         .collect()
+}
+
+/// Return whether one source line should be skipped by repository private-path scanning.
+fn private_path_line_is_exempt(relative_path: &str, line: &str) -> bool {
+    relative_path.ends_with(".rs") && line.trim_start().starts_with("//")
 }
 
 /// Parse one Rust source file and return strict string-contract violations.
@@ -898,9 +904,10 @@ fn write_violations(
 #[cfg(test)]
 mod tests {
     use super::{
-        E2E_FIXTURE_PATH_LITERALS, MCP_PROJECT_SCHEMA_LITERALS, PathJoinLiteralRule,
-        StringLiteralRule, lint_repeated_path_join_literals, lint_repository_private_paths,
-        lint_source, run_strict_strings,
+        E2E_ALLOWED_REPEATED_PATH_JOIN_LITERALS, E2E_FIXTURE_PATH_LITERALS,
+        MCP_PROJECT_SCHEMA_LITERALS, PathJoinLiteralRule, StringLiteralRule,
+        lint_private_path_source, lint_repeated_path_join_literals, lint_repository_private_paths,
+        lint_source, private_path_rules, run_strict_strings,
     };
     use std::fs;
     use std::io;
@@ -944,6 +951,14 @@ mod tests {
         description: "test repeated path join rule",
         paths: &["demo.rs"],
         allowed_repeated_literals: &["reviewed-existing"],
+    };
+
+    /// Rule used by `.mcp.json` allowlist regression tests.
+    const MCP_JSON_PATH_JOIN_TEST_RULE: PathJoinLiteralRule = PathJoinLiteralRule {
+        id: "test-mcp-json-path-join-rule",
+        description: "test repeated path join rule",
+        paths: &["demo.rs"],
+        allowed_repeated_literals: E2E_ALLOWED_REPEATED_PATH_JOIN_LITERALS,
     };
 
     /// Return a test error instead of panicking on a failed condition.
@@ -1230,6 +1245,27 @@ fn fixture(root: &std::path::Path) {
         Ok(())
     }
 
+    /// Reviewed `.mcp.json` fixture joins stay allowlisted for CLI e2e tests.
+    #[test]
+    fn strict_string_lint_allows_reviewed_mcp_json_path_join_literals()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let violations = lint_repeated_path_join_literals(
+            "demo.rs",
+            &MCP_JSON_PATH_JOIN_TEST_RULE,
+            r#"
+fn fixture(root: &std::path::Path) {
+    let _ = root.join(".mcp.json");
+    let _ = root.join(".mcp.json");
+}
+"#,
+        )?;
+        require(
+            violations.is_empty(),
+            "reviewed .mcp.json joins were flagged",
+        )?;
+        Ok(())
+    }
+
     /// Enum `as_str` methods are accepted as typed string centralization points.
     #[test]
     fn strict_string_lint_allows_as_str_centralization() -> Result<(), Box<dyn std::error::Error>> {
@@ -1294,6 +1330,36 @@ enum Status {
         require(
             violations.is_empty(),
             "comments or serde attributes were flagged",
+        )?;
+        Ok(())
+    }
+
+    /// Rust comment-only lines are ignored by private-path scanning, but code literals still fail.
+    #[test]
+    fn private_path_lint_ignores_rust_comment_lines_only() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let rules = private_path_rules()?;
+        let violations = lint_private_path_source(
+            "demo.rs",
+            concat!(
+                "/// C:\\Users\\comment-only\\Projects\n", // projectatlas: path-fixture
+                "//! /home/comment-only/projectatlas\n",   // projectatlas: path-fixture
+                "fn demo() {\n",
+                "    let _ = \"C:\\\\Users\\\\real-user\\\\Projects\";\n", // projectatlas: path-fixture
+                "}\n",
+            ),
+            &rules,
+        );
+        require(
+            violations.len() == 1,
+            "expected comment-only private paths to be ignored while code is flagged",
+        )?;
+        let violation = violations
+            .first()
+            .ok_or_else(|| io::Error::other("missing private path violation"))?;
+        require(
+            violation.line == 4,
+            "private path violation reported the wrong source line",
         )?;
         Ok(())
     }
