@@ -21,13 +21,10 @@
 ## About this fork
 
 A fork of [styler-ai/ProjectAtlas](https://github.com/styler-ai/ProjectAtlas)
-adding **ProjectAtlas Desktop** (`crates/projectatlas-desktop`): a Windows
-dashboard that shows how many tokens ProjectAtlas saved per project and
-connects projects to Claude Code, Codex, and OpenCode in one click. Installers:
-[projectatlas-desktop-releases](https://github.com/einzigTimo/projectatlas-desktop-releases).
-
-All props for ProjectAtlas go to its original creator; everything below is the
-upstream documentation. My second project — please be lenient :)
+adding **ProjectAtlas Desktop** (`crates/projectatlas-desktop`), a Windows
+dashboard for the saved tokens.
+[Installers](https://github.com/einzigTimo/projectatlas-desktop-releases).
+All props go to the original creator. My second project — be lenient :)
 
 ## About
 
@@ -157,7 +154,7 @@ Warm indexed CLI reads in the same audit stayed around 160–166 ms. Repository 
 
 Full benchmark campaigns are manual-only.
 
-The [v0.4.5-rc3 candidate](https://github.com/styler-ai/ProjectAtlas/releases/tag/v0.4.5-rc3) and [release notes](docs/v0.4.5-rc3-release-notes.md) fix graph-limit persistence, deep cross-language symbol identities, and typed CLI/MCP lint output. RC3 is a prerelease and does not replace the stable release; the [RC2 notes](docs/v0.4.5-rc2-release-notes.md) cover earlier stabilization.
+The [v0.4.5-rc3 candidate](https://github.com/styler-ai/ProjectAtlas/releases/tag/v0.4.5-rc3) and [release notes](docs/v0.4.5-rc3-release-notes.md) fix graph-limit persistence, deep cross-language symbol identities, and typed CLI/MCP lint output. RC3 is published as a prerelease and does not replace the stable release; the [RC2 notes](docs/v0.4.5-rc2-release-notes.md) cover earlier stabilization.
 
 ## Documentation
 
