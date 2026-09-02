@@ -51,6 +51,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Enforce Develop Zentrale for publication
+        run: |
+          if [[ "${{ inputs.prepublish_only }}" == "true" ]]; then
+            exit 0
+          fi
+          echo "Produktive Releases dürfen nicht manuell gestartet werden." >&2
+          echo "Verwende die registrierte persistente Vormerkung der Develop Zentrale." >&2
+          exit 1
+
       - name: Classify release version
         id: release_version
         run: |
@@ -137,7 +146,13 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Dependency policy
-        run: cargo deny --locked --all-features check -D warnings
+        run: |
+          cargo deny --locked --all-features --exclude projectatlas-desktop \
+            check -D warnings -A advisory-not-detected
+          cargo deny --locked --all-features --target x86_64-pc-windows-msvc \
+            check advisories licenses sources -D warnings
+          cargo deny --locked --all-features --target x86_64-pc-windows-msvc \
+            check bans -A duplicate -A unused-workspace-dependency -D warnings
 
       - name: Tests
         run: cargo test --workspace --all-features --locked
@@ -202,6 +217,8 @@ jobs:
         run: |
           python3 .github/scripts/issue-checklists.py \
             --repo "$GITHUB_REPOSITORY" \
+            --skip-openspec \
+            --milestone-state-only \
             --milestone "${{ steps.release_version.outputs.milestone }}"
 
   package-unix:

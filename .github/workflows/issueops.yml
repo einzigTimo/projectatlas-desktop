@@ -17,7 +17,7 @@ permissions:
 jobs:
   planned-issue:
     name: planned-issue-readiness
-    if: github.event_name == 'workflow_dispatch' || github.event.issue.milestone != null
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.issue.milestone != null }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

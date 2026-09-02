@@ -72,7 +72,7 @@ window.PAD.activity = (function () {
   }
 
   /** Show or clear the activity panel's note. */
-  function setNote(message, isError) {
+  function setNote(message, isError, heading) {
     const note = document.getElementById("activityNote");
     if (!note) return;
     if (!message) {
@@ -82,14 +82,28 @@ window.PAD.activity = (function () {
     note.textContent = "";
     note.className = "state-note" + (isError ? " error" : "");
     const head = document.createElement("b");
-    head.textContent = isError ? "Aktivität nicht lesbar" : "Nichts anzuzeigen";
+    head.textContent = heading || (isError ? "Aktivität nicht lesbar" : "Nichts anzuzeigen");
     note.appendChild(head);
     note.appendChild(document.createTextNode(message));
     note.hidden = false;
   }
 
+  /** Remove rows from the previously selected project. */
+  function clear() {
+    const host = document.getElementById("activityList");
+    if (host) host.textContent = "";
+  }
+
+  /** Clear stale rows and show a project-bound loading state. */
+  function setLoading() {
+    clear();
+    setNote("Die Aufrufe für das gewählte Projekt werden geladen …", false, "Aktivität wird geladen");
+  }
+
   return {
     render: render,
-    setNote: setNote
+    setNote: setNote,
+    clear: clear,
+    setLoading: setLoading
   };
 })();
