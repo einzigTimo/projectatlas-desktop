@@ -154,7 +154,7 @@ Warm indexed CLI reads in the same audit stayed around 160–166 ms. Repository 
 
 Full benchmark campaigns are manual-only.
 
-The [v0.4.5-rc3 candidate](https://github.com/styler-ai/ProjectAtlas/releases/tag/v0.4.5-rc3) and [release notes](docs/v0.4.5-rc3-release-notes.md) fix graph-limit persistence, deep cross-language symbol identities, and typed CLI/MCP lint output. RC3 is published as a prerelease and does not replace the stable release; the [RC2 notes](docs/v0.4.5-rc2-release-notes.md) cover earlier stabilization.
+The [v0.4.5-rc3 candidate](https://github.com/styler-ai/ProjectAtlas/releases/tag/v0.4.5-rc3) and [release notes](docs/v0.4.5-rc3-release-notes.md) fix graph-limit persistence, deep cross-language symbol identities, and typed CLI/MCP lint output. RC3 is published as a prerelease and does not replace the preceding stable GitHub Latest release. The [RC2 notes](docs/v0.4.5-rc2-release-notes.md) cover earlier stabilization.
 
 ## Documentation
 
