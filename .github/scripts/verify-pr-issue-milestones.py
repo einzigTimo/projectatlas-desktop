@@ -112,7 +112,9 @@ def self_test() -> None:
     assert issue_references("Ignored #0 and GH-0 references", "test-owner/test-repo") == []
 
     failures = verify_references("test-owner/test-repo", [])
-    assert failures == ["Pull request title or body must reference a GitHub issue."]
+    assert failures == [
+        "Pull request title or body must reference a GitHub issue or pull request."
+    ]
 
     fake_issues = {
         ("test-owner/test-repo", 11): {"milestone": {"title": "Version 0.2.3"}},
