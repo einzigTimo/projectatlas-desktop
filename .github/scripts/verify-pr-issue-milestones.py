@@ -68,7 +68,7 @@ def verify_references(
     issue_fetcher=fetch_issue,
 ) -> list[str]:
     if not references:
-        return ["Pull request title or body must reference a GitHub issue."]
+        return ["Pull request title or body must reference a GitHub issue or pull request."]
 
     failures: list[str] = []
     for repo, number in references:
