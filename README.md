@@ -20,20 +20,14 @@
 
 ## About this fork
 
-This repository is a fork of
-[styler-ai/ProjectAtlas](https://github.com/styler-ai/ProjectAtlas) that adds
-**ProjectAtlas Desktop** — a Windows dashboard for ProjectAtlas in
-`crates/projectatlas-desktop`.
-
-The desktop app shows how many tokens ProjectAtlas has saved in your local
-projects — what, when, where, and by what means — and connects projects to the
-AI tools Claude Code, Codex, and OpenCode at the click of a button. Finished
-installers live in
+A fork of [styler-ai/ProjectAtlas](https://github.com/styler-ai/ProjectAtlas)
+adding **ProjectAtlas Desktop** (`crates/projectatlas-desktop`): a Windows
+dashboard that shows how many tokens ProjectAtlas saved per project and
+connects projects to Claude Code, Codex, and OpenCode in one click. Installers:
 [projectatlas-desktop-releases](https://github.com/einzigTimo/projectatlas-desktop-releases).
 
-All props for ProjectAtlas itself go to its original creator; everything below
-this section is the upstream documentation. This is my second project, so
-please be lenient :) Contributions and feedback are welcome.
+All props for ProjectAtlas go to its original creator; everything below is the
+upstream documentation. My second project — please be lenient :)
 
 ## About
 
@@ -133,7 +127,7 @@ See the [CLI/MCP capability guide](docs/agent-integration.md#mcp-tool-sequence),
 
 ## One Large-Application Audit
 
-The chart and table below describe one representative audit, not a universal savings constant. The default local estimator is `ceil(chars_or_bytes / 4)` and is separate from provider billing. ProjectAtlas reports measured source compression separately from modeled navigation narrowing. In v0.4.4, the primary `tokens_avoided`/`average_tokens_avoided` value admits 50% of the deduped aggregate folder-navigation baseline, charges the complete Atlas payload, and leaves every other category unchanged. `maximum_tokens_avoided` retains the all-files folder-scope calculation.
+The chart and table below describe one representative audit, not a universal savings constant. The default local estimator is `ceil(chars_or_bytes / 4)` and is separate from provider billing; measured source compression is reported separately from modeled navigation narrowing. The [audit report](docs/benchmarks/large-application-token-savings.md) owns the exact accounting rules.
 
 <p align="center">
   <img src="docs/assets/token-savings-bar.svg" alt="One large-application audit: 221.1 million estimated tokens without ProjectAtlas and 0.4 million with ProjectAtlas across 142 calls" width="820">
@@ -150,7 +144,7 @@ The chart and table below describe one representative audit, not a universal sav
 | Legacy gross estimated saved | 220,688,826 tokens |
 | Observed savings rate in this one audit | 99.8% |
 
-Warm indexed CLI reads in the same audit stayed around 160–166 ms. Repository shape, hardware, database state, command bounds, and access pattern all matter; initial scan/build work is separate. The [audit report](docs/benchmarks/large-application-token-savings.md) owns the formulas, corpus details, command samples, caveats, and current telemetry-field meanings.
+Warm indexed CLI reads in the same audit stayed around 160–166 ms. Repository shape, hardware, database state, command bounds, and access pattern all matter; initial scan/build work is separate.
 
 ## Release Quality
 
