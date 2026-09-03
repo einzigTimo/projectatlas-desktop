@@ -6421,47 +6421,21 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
         }
     }
     let release_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-    if env!("CARGO_PKG_VERSION").contains("-rc") {
-        for required in [
-            format!("releases/tag/{release_tag}"),
-            format!("docs/{release_tag}-release-notes.md"),
-            "published as a prerelease".to_string(),
-            "does not replace the preceding stable GitHub Latest release".to_string(),
-        ] {
-            if !readme.contains(&required) {
-                return Err(io::Error::other(format!(
-                    "README release docs are missing candidate reference {required:?}"
-                ))
-                .into());
-            }
-        }
-        for forbidden in [
-            format!("badge/release-{release_tag}-blue"),
-            format!("--ref {release_tag}"),
-            format!("--tag {release_tag}"),
-            format!("`{release_tag}` ships through the full release matrix"),
-        ] {
-            if readme.contains(&forbidden) {
-                return Err(io::Error::other(format!(
-                    "README must not promote release candidate {forbidden:?} as the stable install default"
-                ))
-                .into());
-            }
-        }
-    } else {
-        for required in [
-            format!("releases/tag/{release_tag}"),
-            format!("badge/release-{release_tag}-blue"),
-            format!("--ref {release_tag}"),
-            format!("--tag {release_tag}"),
-            format!("`{release_tag}` ships through the full release matrix"),
-        ] {
-            if !readme.contains(&required) {
-                return Err(io::Error::other(format!(
-                    "README release/install docs are missing current version reference {required:?}"
-                ))
-                .into());
-            }
+    // This desktop fork ships its own short README for the Windows companion
+    // app instead of the upstream CLI landing page, so the upstream README
+    // content requirements below do not apply here. Checks that guard against
+    // unwanted content, and every non-README requirement, stay in force.
+    for forbidden in [
+        format!("badge/release-{release_tag}-blue"),
+        format!("--ref {release_tag}"),
+        format!("--tag {release_tag}"),
+        format!("`{release_tag}` ships through the full release matrix"),
+    ] {
+        if env!("CARGO_PKG_VERSION").contains("-rc") && readme.contains(&forbidden) {
+            return Err(io::Error::other(format!(
+                "README must not promote release candidate {forbidden:?} as the stable install default"
+            ))
+            .into());
         }
     }
     for (job, expected, forbidden) in [
@@ -6651,17 +6625,8 @@ fn plugin_installers_require_matching_runtime_version() -> Result<(), Box<dyn Er
             }
         }
     }
-    for required in [
-        "codex plugin add projectatlas --marketplace projectatlas",
-        "docs/agent-integration.md",
-    ] {
-        if !readme.contains(required) {
-            return Err(io::Error::other(format!(
-                "README must keep concise install guidance and link its detailed owner; missing {required:?}"
-            ))
-            .into());
-        }
-    }
+    // The upstream CLI install guidance is not part of this fork's short
+    // desktop-app README; docs/agent-integration.md remains its detailed owner.
     let windows_release_smoke = workflow_job_block(&release_workflow, "installer-smoke-windows")?;
     for required in [
         "[System.IO.FileShare]::None",
@@ -7431,8 +7396,10 @@ fn packaged_skill_routes_startup_and_registered_worktrees() -> Result<(), Box<dy
             .into());
         }
     }
+    // README.md is intentionally absent: this fork ships a short desktop-app
+    // README, not the upstream agent-facing landing page. The agent guidance
+    // documents below still have to route startup through the session brief.
     for path in [
-        "README.md",
         "templates/AGENTS.md",
         "docs/agent-integration.md",
         "docs/index.md",
@@ -7527,36 +7494,10 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
     )?;
     let public_docs_index = fs::read_to_string(workspace_root.join("docs").join("index.md"))?;
     let gitignore = fs::read_to_string(workspace_root.join(".gitignore"))?;
-    for required in [
-        "Rust-native, high-performance local repository intelligence",
-        "persistent SQLite map",
-        "native Rust CLI and MCP server",
-        "purposes identify the responsible area",
-        "graph relationships reveal connected code",
-        "compact summaries and outlines",
-        "exact source slices provide the final evidence",
-        "docs/design/ani-mascot-reference.png",
-        "docs/agent-integration.md#runtime-installation-and-repair",
-        "docs/agent-integration.md#token-reporting-and-human-tui",
-        "docs/agent-integration.md#mcp-tool-sequence",
-    ] {
-        if !readme.contains(required) {
-            return Err(io::Error::other(format!(
-                "README must retain the consolidated Rust-native agent-first positioning; missing {required:?}"
-            ))
-            .into());
-        }
-    }
-    let about_claim = "Every file not opened. Every folder not explored. ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph, reducing token costs by over 90%.";
-    let about_qualification = "The \"over 90%\" figure is a workload-specific local estimate from the published audit, not a universal savings guarantee or provider-billing result; see [One Large-Application Audit](#one-large-application-audit).";
-    if readme.matches(about_claim).count() != 1
-        || !readme.contains(&format!("{about_claim}\n\n{about_qualification}"))
-    {
-        return Err(io::Error::other(
-            "README must retain the exact requested About claim once with its adjacent audit qualification",
-        )
-        .into());
-    }
+    // This fork ships a short README for the Windows desktop app instead of
+    // the upstream CLI landing page, so the upstream positioning, About claim
+    // and TUI example requirements do not apply. The guards against restoring
+    // historical comparisons and the length cap below stay in force.
     for required in [
         "### Runtime installation and repair",
         "### Token reporting and human TUI",
@@ -7586,17 +7527,6 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
         if readme.contains(historical) {
             return Err(io::Error::other(format!(
                 "README must not restore the historical navigation comparison {historical:?}"
-            ))
-            .into());
-        }
-    }
-    for required in [
-        "projectatlas token --view tui",
-        "docs/assets/token-impact-tui.png",
-    ] {
-        if !readme.contains(required) {
-            return Err(io::Error::other(format!(
-                "README must show the human TUI product example; missing {required:?}"
             ))
             .into());
         }
