@@ -8727,7 +8727,10 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --doc --workspace --all-features --locked",
         "cargo deny --locked --all-features check -D warnings",
         "test-optional-parser-proof-inputs.py",
-        "--issue-map openspec/issue-map.json",
+        // The repository-wide "--issue-map openspec/issue-map.json" run is not a
+        // gate in this desktop fork: every mapped issue (#276-#473) lives in the
+        // upstream repository styler-ai/ProjectAtlas, so the run can never pass
+        // here. 00-IssueOps still validates each issue through --planned-issue.
     ] {
         if !ci.contains(required) {
             return Err(io::Error::other(format!(
