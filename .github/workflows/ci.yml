@@ -67,6 +67,18 @@ jobs:
           fi
 
       # /**
+      #  * Purpose: Pin Node so `npm audit` uses the current bulk advisory API.
+      #  *
+      #  * The runner default still calls the retiring quick-audit endpoint,
+      #  * which answers 400/500 and fails this job for reasons unrelated to
+      #  * the change under test.
+      #  */
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      # /**
       #  * Purpose: Validate the checklist tooling itself in this desktop fork.
       #  *
       #  * The repository-wide OpenSpec run is deliberately not part of this job.
