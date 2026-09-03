@@ -39,12 +39,12 @@ cargo test --workspace --all-features --locked
 cargo test --doc --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo run --locked -p projectatlas-lints --bin cargo-projectatlas-lints -- strict-strings
-cargo deny --locked --all-features check -D warnings
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
+cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 npm ci --ignore-scripts --prefix .github/mermaid-parser
 npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
 python3 .github/scripts/issue-checklists.py --self-test
 python3 .github/scripts/test-optional-parser-proof-inputs.py
-python3 .github/scripts/issue-checklists.py --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" --root . --issue-map openspec/issue-map.json
 cargo run --locked -p projectatlas-cli -- --format json scan .
 cargo run --locked -p projectatlas-cli -- lint --report-untracked --purpose-level low
 ```
@@ -59,7 +59,8 @@ Use Cargo and the committed `Cargo.lock` as the complete dependency inventory:
 cargo metadata --locked --offline --format-version 1
 cargo tree --workspace --all-features --locked
 cargo tree --duplicates --workspace --all-features --locked
-cargo deny --locked --all-features check -D warnings
+cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
+cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 ```
 
 The offline metadata command is a deterministic inspection step after the normal locked fetch or build path. It is not a network bootstrap command, and its output is not committed as a second dependency ledger.
@@ -133,6 +134,7 @@ Commit identity is provenance, not a general test invalidation key. After a comm
 - PRs must reference a GitHub issue and have a milestone.
 - Ordinary PRs may reference an issue without closing it; use `Closes #NNN` only when the issue's complete checklist is ready to close.
 - Active OpenSpec task lists must be mapped in `openspec/issue-map.json`, and their authoritative GitHub task sections must exactly mirror local text, order, ownership, and checked state.
+- In this desktop fork the mapped issues (#276-#473) live in the upstream repository `styler-ai/ProjectAtlas`, so `01-CI` runs only the checklist self-test. Per-issue validation happens in `00-IssueOps`, which scopes the same script with `--planned-issue`.
 - CI can be run manually via `workflow_dispatch` when checks do not auto-trigger.
 
 Environment toggles:

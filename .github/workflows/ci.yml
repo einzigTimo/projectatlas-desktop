@@ -66,6 +66,28 @@ jobs:
             exit 1
           fi
 
+      # /**
+      #  * Purpose: Pin Node so `npm audit` uses the current bulk advisory API.
+      #  *
+      #  * The runner default still calls the retiring quick-audit endpoint,
+      #  * which answers 400/500 and fails this job for reasons unrelated to
+      #  * the change under test.
+      #  */
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      # /**
+      #  * Purpose: Validate the checklist tooling itself in this desktop fork.
+      #  *
+      #  * The repository-wide OpenSpec run is deliberately not part of this job.
+      #  * Every entry in openspec/issue-map.json points at an issue of the
+      #  * upstream repository styler-ai/ProjectAtlas (#276-#473), and none of
+      #  * those numbers exist here, so the run could never pass in this fork.
+      #  * Per-issue validation still happens in 00-IssueOps, which scopes the
+      #  * same script to the issue at hand through --planned-issue.
+      #  */
       - name: Issue checklist check
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
@@ -75,10 +97,6 @@ jobs:
           npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser
           python3 .github/scripts/issue-checklists.py --self-test
           python3 .github/scripts/test-optional-parser-proof-inputs.py
-          python3 .github/scripts/issue-checklists.py \
-            --repo "$GITHUB_REPOSITORY" \
-            --root . \
-            --issue-map openspec/issue-map.json
 
       - name: Manual-only full benchmark policy
         run: python3 .github/scripts/verify-manual-benchmark-policy.py
@@ -106,8 +124,23 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # /**
+      #  * Purpose: Keep the dependency policy strict where this fork controls it.
+      #  *
+      #  * Every bans and advisories finding originates in the Tauri and GTK3
+      #  * tree of projectatlas-desktop: 33 duplicate crate versions plus
+      #  * unmaintained and unsound notices, and no actual vulnerability. The
+      #  * first run therefore keeps the full strict policy, duplicate versions
+      #  * included, for every other crate. The second run covers the whole
+      #  * workspace: licenses, sources, wildcards, unused workspace
+      #  * dependencies, vulnerabilities, unsoundness and yanked crates all
+      #  * stay blocking. deny.toml scopes `unmaintained` to direct workspace
+      #  * dependencies, so only the transitive Tauri chain is exempt.
+      #  */
       - name: Dependency policy
-        run: cargo deny --locked --all-features check -D warnings
+        run: |
+          cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
+          cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 
       - name: Tests
         run: cargo test --workspace --all-features --locked

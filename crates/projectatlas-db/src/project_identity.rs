@@ -1231,9 +1231,19 @@ mod tests {
 
     /// Assert the current project report without reading schema-private raw columns.
     fn assert_usage_report(store: &AtlasStore, retained: bool) -> Result<(), Box<dyn Error>> {
-        let events = store.usage_events(Some("identity-test"))?;
+        let mut events = store.usage_events(Some("identity-test"))?;
         let overview = store.token_overview(Some("identity-test"))?;
         if retained {
+            // The store assigns `created_at_epoch` on insert, so assert that it is
+            // set and compare the authored payload with the timestamp normalized
+            // instead of pinning a wall-clock value that can never match.
+            for event in &mut events {
+                require(
+                    event.created_at_epoch > 0,
+                    "project-scoped usage event lost its store timestamp",
+                )?;
+                event.created_at_epoch = 0;
+            }
             require_eq(
                 &events,
                 &vec![identity_transition_usage_event()],

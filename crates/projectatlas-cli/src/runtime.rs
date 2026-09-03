@@ -2474,6 +2474,7 @@ pub(crate) fn run_init_bootstrap(
     db_path: &Path,
     config_path: Option<&Path>,
     options: &InitBootstrapOptions,
+    write_host_configs: Option<&dyn Fn(&Path) -> Vec<InitHostConfigStatus>>,
 ) -> Result<InitSetupReport, CliError> {
     let root = canonical_source_project_root(root)?;
     let project_dir = root.join(".projectatlas");
@@ -2485,9 +2486,16 @@ pub(crate) fn run_init_bootstrap(
     let db_existed = db_path.exists();
 
     init_project_with_config(&root, Some(&config_file))?;
+    // Generate the host MCP configs before the scan. `init` also writes the
+    // project-scoped `.mcp.json` into the project root, and writing it after the
+    // scan would leave this very run's index stale for the next command.
+    let host_configs = write_host_configs.map_or_else(Vec::new, |write| write(&root));
+    let host_configs_failed = host_configs
+        .iter()
+        .any(|config| config.status == InitPhaseStatus::Failed);
     let mut store = open_atlas_store_for_project(db_path, &root)?;
 
-    let mut ok = true;
+    let mut ok = !host_configs_failed;
     let (scan_status, scan_report, scan_error) = if options.no_scan {
         (InitPhaseStatus::Skipped, None, None)
     } else {
@@ -2519,7 +2527,12 @@ pub(crate) fn run_init_bootstrap(
         scope: HealthScope::purpose_default(),
     };
     let purpose_queue = purpose_curation_page(&store, &purpose_query, "project-init")?;
-    let next_steps = init_next_steps(options.no_scan, scan_error.is_some(), purpose_queue.total);
+    let mut next_steps =
+        init_next_steps(options.no_scan, scan_error.is_some(), purpose_queue.total);
+    if host_configs_failed {
+        next_steps
+            .push("Fix generated host MCP config errors and rerun projectatlas init.".to_string());
+    }
 
     Ok(InitSetupReport {
         ok,
@@ -2540,7 +2553,7 @@ pub(crate) fn run_init_bootstrap(
             status: init_path_status(db_existed),
             path: normalize_native_path_display(db_path),
         },
-        host_configs: Vec::new(),
+        host_configs,
         scan: InitScanPhase {
             status: scan_status,
             requested: !options.no_scan,

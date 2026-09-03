@@ -136,8 +136,23 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # /**
+      #  * Purpose: Keep the dependency policy strict where this fork controls it.
+      #  *
+      #  * Every bans and advisories finding originates in the Tauri and GTK3
+      #  * tree of projectatlas-desktop: 33 duplicate crate versions plus
+      #  * unmaintained and unsound notices, and no actual vulnerability. The
+      #  * first run therefore keeps the full strict policy, duplicate versions
+      #  * included, for every other crate. The second run covers the whole
+      #  * workspace: licenses, sources, wildcards, unused workspace
+      #  * dependencies, vulnerabilities, unsoundness and yanked crates all
+      #  * stay blocking. deny.toml scopes `unmaintained` to direct workspace
+      #  * dependencies, so only the transitive Tauri chain is exempt.
+      #  */
       - name: Dependency policy
-        run: cargo deny --locked --all-features check -D warnings
+        run: |
+          cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
+          cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 
       - name: Tests
         run: cargo test --workspace --all-features --locked
@@ -170,6 +185,18 @@ jobs:
 
       - name: Release notes generator self-test
         run: python3 .github/scripts/release-notes.py --self-test
+
+      # /**
+      #  * Purpose: Pin Node so `npm audit` uses the current bulk advisory API.
+      #  *
+      #  * The runner default still calls the retiring quick-audit endpoint,
+      #  * which answers 400/500 and fails this job for reasons unrelated to
+      #  * the change under test.
+      #  */
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
 
       - name: Issue checklist self-test
         run: |
