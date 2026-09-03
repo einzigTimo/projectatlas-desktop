@@ -2173,11 +2173,14 @@ mod tests {
         Ok(())
     }
 
+    /// The Pages projection must stay declared by the workflow that publishes it.
+    ///
+    /// The upstream README link is not asserted here: this fork ships a short
+    /// README for the Windows desktop app rather than the upstream CLI landing
+    /// page. The publishing workflow remains the owner of the projection.
     #[test]
     fn repository_and_pages_landing_links_are_declared() {
-        let readme = include_str!("../../../README.md");
         let workflow = include_str!("../../../.github/workflows/04-docs.yml");
-        assert!(readme.contains("https://styler-ai.github.io/ProjectAtlas/language-support/"));
         assert!(workflow.contains("href=\"language-support/\""));
         assert!(workflow.contains("--html target/doc/language-support/index.html"));
     }
