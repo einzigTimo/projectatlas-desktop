@@ -3,6 +3,7 @@
 
 use proc_macro2::{TokenStream, TokenTree};
 use regex::Regex;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
@@ -32,6 +33,10 @@ const EXIT_USAGE: u8 = 2;
 const PRIVATE_PATH_RULE_ID: &str = "private-absolute-path";
 /// One explicit escape hatch for intentional path-semantics examples.
 const PRIVATE_PATH_FIXTURE_MARKER: &str = "projectatlas: path-fixture";
+/// Documentation elision that stands in for an omitted path segment.
+const PRIVATE_PATH_ELLIPSIS: &str = "...";
+/// Placeholder character the private-path patterns already reject as a segment.
+const PRIVATE_PATH_PLACEHOLDER: &str = "<";
 /// Small set of machine-specific path shapes that must use portable placeholders.
 const PRIVATE_PATH_PATTERNS: &[&str] = &[
     r"(?i)[A-Z]:[\\/]{1,2}Users[\\/]{1,2}[^\r\n\\/<>{}]+(?:[\\/]{1,2}|$)",
@@ -431,8 +436,11 @@ fn lint_private_path_source(
         .lines()
         .enumerate()
         .filter(|(_, line)| {
-            !line.contains(PRIVATE_PATH_FIXTURE_MARKER)
-                && rules.iter().any(|rule| rule.is_match(line))
+            if line.contains(PRIVATE_PATH_FIXTURE_MARKER) {
+                return false;
+            }
+            let scanned = elide_documented_placeholders(line);
+            rules.iter().any(|rule| rule.is_match(&scanned))
         })
         .map(|(line, _)| StringLiteralViolation {
             path: relative_path.to_string(),
@@ -443,6 +451,22 @@ fn lint_private_path_source(
             description: "Machine-specific paths must use a portable placeholder or derived path.",
         })
         .collect()
+}
+
+/// Map documentation elisions onto the placeholder character the patterns reject.
+///
+/// The private-path patterns already exclude `<`, `>`, `{` and `}` from a path
+/// segment, so those characters mark a segment as a placeholder rather than an
+/// account name. Documentation that spells out a forbidden shape writes the
+/// omitted segment as `...`; mapping that elision onto the existing placeholder
+/// character stops the prose from matching while every real machine-specific
+/// path on the same line keeps being reported.
+fn elide_documented_placeholders(line: &str) -> Cow<'_, str> {
+    if line.contains(PRIVATE_PATH_ELLIPSIS) {
+        Cow::Owned(line.replace(PRIVATE_PATH_ELLIPSIS, PRIVATE_PATH_PLACEHOLDER))
+    } else {
+        Cow::Borrowed(line)
+    }
 }
 
 /// Parse one Rust source file and return strict string-contract violations.
@@ -898,9 +922,10 @@ fn write_violations(
 #[cfg(test)]
 mod tests {
     use super::{
-        E2E_FIXTURE_PATH_LITERALS, MCP_PROJECT_SCHEMA_LITERALS, PathJoinLiteralRule,
-        StringLiteralRule, lint_repeated_path_join_literals, lint_repository_private_paths,
-        lint_source, run_strict_strings,
+        E2E_ALLOWED_REPEATED_PATH_JOIN_LITERALS, E2E_FIXTURE_PATH_LITERALS,
+        MCP_PROJECT_SCHEMA_LITERALS, PathJoinLiteralRule, StringLiteralRule,
+        lint_private_path_source, lint_repeated_path_join_literals, lint_repository_private_paths,
+        lint_source, private_path_rules, run_strict_strings,
     };
     use std::fs;
     use std::io;
@@ -926,6 +951,14 @@ mod tests {
         ban_unlisted: true,
         literals: MCP_PROJECT_SCHEMA_LITERALS,
         allowed_literals: &["allowed inline format {value}"],
+    };
+
+    /// Rule used by the reviewed `.mcp.json` fixture-join regression test.
+    const MCP_JSON_PATH_JOIN_TEST_RULE: PathJoinLiteralRule = PathJoinLiteralRule {
+        id: "test-mcp-json-path-join-rule",
+        description: "test repeated path join rule",
+        paths: &["demo.rs"],
+        allowed_repeated_literals: E2E_ALLOWED_REPEATED_PATH_JOIN_LITERALS,
     };
 
     /// Rule used by e2e fixture path centralization tests.
@@ -1329,6 +1362,79 @@ enum ProjectStatus {
         require(
             violations.is_empty(),
             "typed project-state serialization was flagged",
+        )?;
+        Ok(())
+    }
+
+    /// Documented elisions pass while a real machine path in a comment still fails.
+    #[test]
+    fn private_path_lint_ignores_documented_elisions_only() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let rules = private_path_rules()?;
+        let violations = lint_private_path_source(
+            "demo.rs",
+            concat!(
+                r"/// forbids literal `C:\Users\...`-shaped paths.", // projectatlas: path-fixture
+                "\n",
+                r"/// surfaces to the user as `C:\Users\...\.config/opencode`.", // projectatlas: path-fixture
+                "\n",
+                r"//! the portable form of /home/... stays derived at runtime", // projectatlas: path-fixture
+                "\n",
+                r"// C:\Users\real-owner\Projects", // projectatlas: path-fixture
+                "\n",
+            ),
+            &rules,
+        );
+        require(
+            violations.len() == 1,
+            "expected only the real machine path to be reported",
+        )?;
+        let violation = violations
+            .first()
+            .ok_or_else(|| io::Error::other("missing private path violation"))?;
+        require(
+            violation.line == 4,
+            "private path violation pointed at the wrong line",
+        )?;
+        Ok(())
+    }
+
+    /// One line carrying a documented elision and a real machine path.
+    const BOTH_SHAPES_LINE: &str = concat!(
+        r"// C:\Users\...\X C:\Users\owner\Y", // projectatlas: path-fixture
+        "\n",
+    );
+
+    /// A real machine path keeps failing even next to an elision on the same line.
+    #[test]
+    fn private_path_lint_still_flags_real_paths_beside_elisions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rules = private_path_rules()?;
+        let violations = lint_private_path_source("demo.rs", BOTH_SHAPES_LINE, &rules);
+        require(
+            violations.len() == 1,
+            "a real machine path beside an elision was not reported",
+        )?;
+        Ok(())
+    }
+
+    /// Reviewed `.mcp.json` fixture joins stay allowlisted for the CLI e2e tests.
+    #[test]
+    fn strict_string_lint_allows_reviewed_mcp_json_path_joins()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let violations = lint_repeated_path_join_literals(
+            "demo.rs",
+            &MCP_JSON_PATH_JOIN_TEST_RULE,
+            r#"
+fn fixture(root: &std::path::Path) {
+    let _ = root.join(".mcp.json");
+    let _ = root.join(".mcp.json");
+}
+"#,
+        )?;
+        require(
+            violations.is_empty(),
+            "reviewed .mcp.json joins were flagged",
         )?;
         Ok(())
     }
