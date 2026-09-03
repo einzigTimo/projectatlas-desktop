@@ -8,10 +8,10 @@ use crate::atlas_map::{
 };
 use crate::runtime::{
     DEFAULT_HEALTH_LIMIT, INDEX_WORKER_SAFE_CEILING, IndexInitRequired, IndexProjectMismatch,
-    IndexRefreshRequired, IndexVerificationIncomplete, InitBootstrapOptions, InitHydrationPhase,
-    InitHydrationStatus, InitPhaseStatus, InitScanPhase, InitSetupReport, MAX_HEALTH_LIMIT,
-    MAX_SYMBOL_FILE_BYTES, ProjectWorktreeRequired, PurposeCuratorHandoff, PurposeLintLevel,
-    PurposeReviewRequest, ResetIndexReport, ScanReport, ScanRuntimePlan,
+    IndexRefreshRequired, IndexVerificationIncomplete, InitBootstrapOptions, InitHostConfigStatus,
+    InitHydrationPhase, InitHydrationStatus, InitPhaseStatus, InitScanPhase, InitSetupReport,
+    MAX_HEALTH_LIMIT, MAX_SYMBOL_FILE_BYTES, ProjectWorktreeRequired, PurposeCuratorHandoff,
+    PurposeLintLevel, PurposeReviewRequest, ResetIndexReport, ScanReport, ScanRuntimePlan,
     SettingsClassifiedNavigationReport, SourceObservationRegistry, SymbolBuildOptions,
     UsageRuntimeInstance, VerifiedReadOutcome, VerifiedReadStamp, build_settings_report,
     byte_count_to_tokens, canonical_project_root, canonical_source_project_root,
@@ -4446,22 +4446,33 @@ impl ProjectAtlasMcpServer {
         state: &McpProjectState,
         config_path: &Path,
         options: &InitBootstrapOptions,
+        write_host_configs: Option<&dyn Fn(&Path) -> Vec<InitHostConfigStatus>>,
     ) -> Result<InitSetupReport, CliError> {
         let Some(selection) = state
             .worktree
             .as_ref()
             .filter(|selection| selection.registration_id.is_some())
         else {
-            let report =
-                run_init_bootstrap(&state.root, &state.db_path, Some(config_path), options)?;
+            let report = run_init_bootstrap(
+                &state.root,
+                &state.db_path,
+                Some(config_path),
+                options,
+                write_host_configs,
+            )?;
             if report.ok {
                 self.bind_initialized_registration_for_root(state)?;
             }
             return Ok(report);
         };
         if state.db_path.is_file() {
-            let mut report =
-                run_init_bootstrap(&state.root, &state.db_path, Some(config_path), options)?;
+            let mut report = run_init_bootstrap(
+                &state.root,
+                &state.db_path,
+                Some(config_path),
+                options,
+                write_host_configs,
+            )?;
             report.hydration = Some(InitHydrationPhase {
                 status: InitHydrationStatus::Existing,
                 source_root: None,
@@ -4500,6 +4511,7 @@ impl ProjectAtlasMcpServer {
                         force_rescan: options.force_rescan,
                         text_index_max_bytes: options.text_index_max_bytes,
                     },
+                    write_host_configs,
                 )?;
                 report.scan = InitScanPhase {
                     status: InitPhaseStatus::Verified,
@@ -4514,8 +4526,13 @@ impl ProjectAtlasMcpServer {
                 report
             }
             McpWorktreeHydration::Fallback(reason) => {
-                let mut report =
-                    run_init_bootstrap(&state.root, &state.db_path, Some(config_path), options)?;
+                let mut report = run_init_bootstrap(
+                    &state.root,
+                    &state.db_path,
+                    Some(config_path),
+                    options,
+                    write_host_configs,
+                )?;
                 report.hydration = Some(InitHydrationPhase {
                     status: InitHydrationStatus::Fallback,
                     source_root: Some(normalize_native_path_display(&self.control_state.root)),
@@ -8162,7 +8179,7 @@ impl ProjectAtlasMcpServer {
         Self::as_mcp_text((|| {
             let state = self.init_project_root(params.project_path, params.worktree)?;
             let config_path = init_config_path(&state.root, state.config_path.as_deref());
-            let mut report = self.run_registered_worktree_init(
+            let report = self.run_registered_worktree_init(
                 &state,
                 &config_path,
                 &InitBootstrapOptions {
@@ -8170,14 +8187,15 @@ impl ProjectAtlasMcpServer {
                     force_rescan: params.force_rescan.unwrap_or(false),
                     text_index_max_bytes: params.text_index_max_bytes,
                 },
+                Some(&|canonical_root: &Path| {
+                    crate::init_mcp_config_statuses(
+                        &canonical_root.join(PROJECTATLAS_DIR_NAME),
+                        &state.db_path,
+                        &config_path,
+                        false,
+                    )
+                }),
             )?;
-            crate::write_init_mcp_config_files(
-                &mut report,
-                &state.root.join(PROJECTATLAS_DIR_NAME),
-                &state.db_path,
-                &config_path,
-                false,
-            );
             Self::encode_named_payload(MCP_PAYLOAD_INIT, &report)
         })())
     }
