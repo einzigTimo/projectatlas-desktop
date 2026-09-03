@@ -9,16 +9,13 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
-# tauri-utils 2.9.3 resolves urlpattern 0.3.0, whose rust-unic chain is
-# unmaintained and has no safe upgrade. Keep these exceptions exact; all
-# vulnerability, unsoundness, and yanked advisories remain fail-closed.
-ignore = [
-  "RUSTSEC-2025-0075",
-  "RUSTSEC-2025-0080",
-  "RUSTSEC-2025-0081",
-  "RUSTSEC-2025-0098",
-  "RUSTSEC-2025-0100",
-]
+ignore = []
+# Report unmaintained crates only where the workspace depends on them directly.
+# The Windows/Tauri target drags in the transitively unmaintained rust-unic
+# chain (tauri-utils -> urlpattern -> unic-*), for which no safe upgrade exists.
+# Vulnerability, unsoundness, and yanked advisories stay fail-closed on every
+# target, transitive dependencies included.
+unmaintained = "workspace"
 
 [licenses]
 version = 2

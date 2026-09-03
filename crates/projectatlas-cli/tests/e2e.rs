@@ -3774,6 +3774,44 @@ fn init_bootstrap_creates_db_scan_report_and_host_configs() -> Result<(), Box<dy
 }
 
 #[test]
+fn cli_init_leaves_a_current_index_for_its_own_generated_configs() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let repo = temp.path().join(TEST_REPO_DIR);
+    fs::create_dir_all(repo.join(SRC_DIR_NAME))?;
+    fs::write(
+        repo.join(SRC_DIR_NAME).join(LIB_RS_FILE_NAME),
+        "pub fn owner() {}\n",
+    )?;
+
+    Command::cargo_bin("projectatlas")?
+        .current_dir(&repo)
+        .arg("init")
+        .assert()
+        .success();
+
+    // `init` writes `<root>/.mcp.json`, which is ordinary indexed source. When
+    // that write happened after the scan, the index init had just built was
+    // already stale. A writable database hides this, because navigation then
+    // silently refreshes itself; holding the write lock exposes it, and the
+    // command aborts with `refresh_required` instead of navigating.
+    let root_mcp_config = repo.join(".mcp.json");
+    if !root_mcp_config.is_file() {
+        return Err(io::Error::other("init did not write the project-root .mcp.json").into());
+    }
+    let connection = Connection::open(repo.join(ATLAS_DIR_NAME).join("projectatlas.db"))?;
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    Command::cargo_bin("projectatlas")?
+        .current_dir(&repo)
+        .arg("overview")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("overview:"));
+    connection.execute_batch("ROLLBACK")?;
+
+    Ok(())
+}
+
+#[test]
 #[ignore = "dedicated hosted cross-platform holistic worktree proof"]
 fn holistic_agent_worktree_flow_keeps_local_atlases_isolated_across_cli_watch_and_mcp()
 -> Result<(), Box<dyn Error>> {

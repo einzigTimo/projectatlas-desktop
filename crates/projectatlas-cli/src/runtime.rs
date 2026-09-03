@@ -2468,12 +2468,39 @@ pub(crate) fn init_config_path(root: &Path, explicit: Option<&Path>) -> PathBuf 
     nested_config
 }
 
-/// Run the one-call first-run init bootstrap.
+/// Next step reported when a generated host MCP config could not be written.
+pub(crate) const INIT_HOST_CONFIG_FAILURE_NEXT_STEP: &str =
+    "Fix generated host MCP config errors and rerun projectatlas init.";
+
+/// Run the one-call first-run init bootstrap without generated host configs.
 pub(crate) fn run_init_bootstrap(
     root: &Path,
     db_path: &Path,
     config_path: Option<&Path>,
     options: &InitBootstrapOptions,
+) -> Result<InitSetupReport, CliError> {
+    run_init_bootstrap_with_host_configs(root, db_path, config_path, options, &mut |_, _| {
+        Vec::new()
+    })
+}
+
+/// Run the one-call first-run init bootstrap and generate host configs before the scan.
+///
+/// # Purpose
+///
+/// `write_host_configs` runs after the project directory, config and store
+/// exist but *before* the scan. One of the generated files, `<root>/.mcp.json`,
+/// lives in the indexed source tree: writing it after the scan added a source
+/// path the fresh index had never seen, so the very next command aborted with
+/// `refresh_required` even though nothing but init itself had touched the
+/// project. Generating the configs first makes the scan cover them and leaves
+/// init with an index that is actually current.
+pub(crate) fn run_init_bootstrap_with_host_configs(
+    root: &Path,
+    db_path: &Path,
+    config_path: Option<&Path>,
+    options: &InitBootstrapOptions,
+    write_host_configs: &mut dyn FnMut(&Path, &Path) -> Vec<InitHostConfigStatus>,
 ) -> Result<InitSetupReport, CliError> {
     let root = canonical_source_project_root(root)?;
     let project_dir = root.join(".projectatlas");
@@ -2487,7 +2514,12 @@ pub(crate) fn run_init_bootstrap(
     init_project_with_config(&root, Some(&config_file))?;
     let mut store = open_atlas_store_for_project(db_path, &root)?;
 
-    let mut ok = true;
+    let host_configs = write_host_configs(&root, &config_file);
+    let host_configs_failed = host_configs
+        .iter()
+        .any(|entry| entry.status == InitPhaseStatus::Failed);
+
+    let mut ok = !host_configs_failed;
     let (scan_status, scan_report, scan_error) = if options.no_scan {
         (InitPhaseStatus::Skipped, None, None)
     } else {
@@ -2519,7 +2551,11 @@ pub(crate) fn run_init_bootstrap(
         scope: HealthScope::purpose_default(),
     };
     let purpose_queue = purpose_curation_page(&store, &purpose_query, "project-init")?;
-    let next_steps = init_next_steps(options.no_scan, scan_error.is_some(), purpose_queue.total);
+    let mut next_steps =
+        init_next_steps(options.no_scan, scan_error.is_some(), purpose_queue.total);
+    if host_configs_failed {
+        next_steps.push(INIT_HOST_CONFIG_FAILURE_NEXT_STEP.to_string());
+    }
 
     Ok(InitSetupReport {
         ok,
@@ -2540,7 +2576,7 @@ pub(crate) fn run_init_bootstrap(
             status: init_path_status(db_existed),
             path: normalize_native_path_display(db_path),
         },
-        host_configs: Vec::new(),
+        host_configs,
         scan: InitScanPhase {
             status: scan_status,
             requested: !options.no_scan,
