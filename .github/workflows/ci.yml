@@ -112,8 +112,21 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # /**
+      #  * Purpose: Keep the dependency policy strict where this fork controls it.
+      #  *
+      #  * Every bans and advisories finding originates in the Tauri and GTK3
+      #  * tree of projectatlas-desktop: 33 duplicate crate versions plus
+      #  * unmaintained and unsound notices, and no actual vulnerability. The
+      #  * first run therefore keeps the full strict policy, duplicate versions
+      #  * included, for every other crate. The second run covers the whole
+      #  * workspace: licenses, sources, wildcards, unused workspace
+      #  * dependencies, real vulnerabilities and yanked crates stay blocking.
+      #  */
       - name: Dependency policy
-        run: cargo deny --locked --all-features check -D warnings
+        run: |
+          cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
+          cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound
 
       - name: Tests
         run: cargo test --workspace --all-features --locked

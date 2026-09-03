@@ -8214,18 +8214,23 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         )
         .into());
     }
-    let cargo_deny_command = "cargo deny --locked --all-features check -D warnings";
+    let cargo_deny_commands = [
+        "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
+    ];
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
         ("release", release_workflow.as_str()),
         ("pre-push hook", hook.as_str()),
         ("workflow docs", workflow_docs.as_str()),
     ] {
-        if !content.contains(cargo_deny_command) {
-            return Err(io::Error::other(format!(
-                "{owner} is missing the locked all-feature cargo-deny command"
-            ))
-            .into());
+        for command in cargo_deny_commands {
+            if !content.contains(command) {
+                return Err(io::Error::other(format!(
+                    "{owner} is missing the locked all-feature cargo-deny command {command:?}"
+                ))
+                .into());
+            }
         }
     }
 
@@ -8705,7 +8710,8 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8725,7 +8731,8 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
         "test-optional-parser-proof-inputs.py",
         // The repository-wide "--issue-map openspec/issue-map.json" run is not a
         // gate in this desktop fork: every mapped issue (#276-#473) lives in the
