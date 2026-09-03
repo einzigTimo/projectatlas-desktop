@@ -145,12 +145,14 @@ jobs:
       #  * first run therefore keeps the full strict policy, duplicate versions
       #  * included, for every other crate. The second run covers the whole
       #  * workspace: licenses, sources, wildcards, unused workspace
-      #  * dependencies, real vulnerabilities and yanked crates stay blocking.
+      #  * dependencies, vulnerabilities, unsoundness and yanked crates all
+      #  * stay blocking. deny.toml scopes `unmaintained` to direct workspace
+      #  * dependencies, so only the transitive Tauri chain is exempt.
       #  */
       - name: Dependency policy
         run: |
           cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
-          cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound
+          cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 
       - name: Tests
         run: cargo test --workspace --all-features --locked

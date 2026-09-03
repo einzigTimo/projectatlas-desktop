@@ -8146,7 +8146,7 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
     }
     let cargo_deny_commands = [
         "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
-        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate",
     ];
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
@@ -8641,7 +8641,7 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
         "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
-        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8662,7 +8662,7 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
         "cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency",
-        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound",
+        "cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate",
         "test-optional-parser-proof-inputs.py",
         // The repository-wide "--issue-map openspec/issue-map.json" run is not a
         // gate in this desktop fork: every mapped issue (#276-#473) lives in the

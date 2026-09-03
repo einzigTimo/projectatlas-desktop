@@ -9,6 +9,12 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+# Report unmaintained crates only where the workspace depends on them directly.
+# The Windows/Tauri target drags in the transitively unmaintained rust-unic
+# chain (tauri-utils -> urlpattern -> unic-*) and the GTK3 bindings, for which
+# no safe upgrade exists. Vulnerability, unsoundness and yanked advisories stay
+# fail-closed on every target, transitive dependencies included.
+unmaintained = "workspace"
 ignore = []
 
 [licenses]

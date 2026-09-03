@@ -16,7 +16,7 @@ cargo fmt --all --check
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo deny --locked --all-features --exclude projectatlas-desktop check -D warnings -A unused-workspace-dependency
-cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate -A unmaintained -A unsound
+cargo deny --locked --all-features check bans advisories licenses sources -D warnings -A duplicate
 cargo test --workspace --all-features --locked
 cargo test --doc --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
