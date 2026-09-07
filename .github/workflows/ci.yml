@@ -58,8 +58,22 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
 
+      # /**
+      #  * Purpose: Require the IssueOps bookkeeping only on pull requests a
+      #  * person opened.
+      #  *
+      #  * Bot-authored pull requests cannot satisfy it: Dependabot and the
+      #  * Copilot agent have no planning issue to reference and cannot assign
+      #  * a milestone, so this step failed first and skipped every remaining
+      #  * check in the job. No dependency update could ever reach green, which
+      #  * is the opposite of holding them to the same standard. They keep
+      #  * running the gates that do apply to them — source policy lints,
+      #  * format, check, clippy, dependency policy, tests, doc tests and
+      #  * rustdoc — and their provenance is the locked manifest diff rather
+      #  * than an issue number.
+      #  */
       - name: Issue reference check
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
