@@ -17,6 +17,17 @@ on:
     types: [created, edited, deleted]
   workflow_dispatch:
 
+# /**
+#  * Purpose: Keep one live run per ref so review events do not pile up runs.
+#  *
+#  * Review and review-comment events re-run this workflow for the Codex review
+#  * gate. Without a group each of them started another full matrix while the
+#  * previous one kept going. Runs on main are never cancelled.
+#  */
+concurrency:
+  group: 01-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
   issues: read
@@ -148,6 +159,9 @@ jobs:
   e2e-smoke:
     name: e2e-smoke ${{ matrix.label }}
     needs: verify
+    # The four-platform matrix only reacts to code, not to review activity:
+    # a review comment cannot change what these tests execute.
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
