@@ -138,22 +138,44 @@ jobs:
       - name: Rustdoc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 
+  # Kostenbremse (07.09.2026): Die Vier-OS-Matrix ist der groesste Posten dieses
+  # Repos -- GitHub rechnet macOS 10x und Windows 2x, die beiden macOS-Zeilen
+  # allein sind rund 87 % der Matrix-Kosten. Sie lief bisher bei JEDEM Push und
+  # jedem Pull Request.
+  #
+  # Warum ein eigener Job und kein "if" am e2e-smoke-Job: In
+  # jobs.<id>.if stehen nur die Kontexte github, needs, vars und inputs zur
+  # Verfuegung -- NICHT matrix. Ein "if: matrix.os == ..." waere dort still
+  # unwirksam. Die Matrix muss deshalb vorher entschieden und als JSON
+  # weitergereicht werden.
+  matrix-plan:
+    name: matrix-plan
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.plan.outputs.include }}
+    steps:
+      - name: Plattformen fuer diesen Anlass festlegen
+        id: plan
+        shell: bash
+        run: |
+          # Volle Matrix nur, wo sie wirklich zaehlt: bei Tags (Release-Kandidat)
+          # und wenn jemand sie ausdruecklich anfordert (workflow_dispatch).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Voller Plattformlauf (Anlass: ${{ github.event_name }} / ${{ github.ref }})."
+            echo 'include=[{"label":"linux","os":"ubuntu-latest"},{"label":"windows","os":"windows-latest"},{"label":"macos-x64","os":"macos-15-intel"},{"label":"macos-arm64","os":"macos-14"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo "Nur Linux (Anlass: ${{ github.event_name }}). Volle Matrix per workflow_dispatch oder Tag."
+            echo 'include=[{"label":"linux","os":"ubuntu-latest"}]' >> "$GITHUB_OUTPUT"
+          fi
+
   e2e-smoke:
     name: e2e-smoke ${{ matrix.label }}
-    needs: verify
+    needs: [verify, matrix-plan]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: linux
-            os: ubuntu-latest
-          - label: windows
-            os: windows-latest
-          - label: macos-x64
-            os: macos-15-intel
-          - label: macos-arm64
-            os: macos-14
+        include: ${{ fromJSON(needs.matrix-plan.outputs.include) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
