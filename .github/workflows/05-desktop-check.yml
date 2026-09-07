@@ -6,10 +6,11 @@ name: 05-Desktop-Check
 #  * Purpose: Catch Rust regressions and frontend syntax errors before packaging.
 #  */
 
-# 01-CI only runs on main and dev, so nothing verified this fork's working branch.
-# A single Windows job is deliberate: the full 01-CI matrix (verify plus e2e-smoke on
-# four operating systems) would run on every push here and cost far more than the one
-# question this workflow answers — is the desktop app still build- and test-ready?
+# 01-CI läuft bei Pushes auf main/dev, Pull Requests mit Ziel main/dev und
+# Review-Ereignissen. Dieser fokussierte Workflow deckt bewusst nur Pushes auf main,
+# Pull Requests mit Ziel main und manuelle Aufrufe mit einem Windows-Job ab, statt
+# eine weitere Vier-OS-Matrix auszuführen. Er beantwortet die Desktop-spezifische
+# Frage: Ist die App weiterhin bau- und testbereit?
 on:
   push:
     branches: [main]
