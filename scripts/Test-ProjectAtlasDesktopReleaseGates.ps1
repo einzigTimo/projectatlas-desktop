@@ -22,16 +22,34 @@ if ($parseErrors.Count -gt 0) {
 }
 
 $promotionGuard = 'Produktiver Release blockiert: Die verpflichtende zweiphasige Clean-Windows-Attestierung'
+$legacyPublishFlag = '$legacySingleInvocationPublishEnabled = $false'
+$legacyPublishBinding = '$executeLegacySingleInvocationPublish = $Publish -and $legacySingleInvocationPublishEnabled'
+$legacyPublishGuard = 'if ($Publish -and -not $executeLegacySingleInvocationPublish)'
+$legacyImplementationGuard = 'if ($executeLegacySingleInvocationPublish)'
+$legacyPublishFlagPosition = $releaseScriptText.IndexOf($legacyPublishFlag, [StringComparison]::Ordinal)
+$legacyPublishBindingPosition = $releaseScriptText.IndexOf($legacyPublishBinding, [StringComparison]::Ordinal)
+$legacyPublishGuardPosition = $releaseScriptText.IndexOf($legacyPublishGuard, [StringComparison]::Ordinal)
+$legacyImplementationPosition = $releaseScriptText.IndexOf($legacyImplementationGuard, [StringComparison]::Ordinal)
 $promotionGuardPosition = $releaseScriptText.IndexOf($promotionGuard, [StringComparison]::Ordinal)
 $draftCreatePosition = $releaseScriptText.IndexOf("`$releaseArguments.Add('create')", [StringComparison]::Ordinal)
 $draftPublishPosition = $releaseScriptText.IndexOf("'--verify-tag', '--draft=false'", [StringComparison]::Ordinal)
-if ($promotionGuardPosition -lt 0 -or $draftCreatePosition -lt 0 -or $draftPublishPosition -lt 0 -or
+if ($legacyPublishFlagPosition -lt 0 -or
+    $legacyPublishBindingPosition -le $legacyPublishFlagPosition -or
+    $legacyPublishGuardPosition -le $legacyPublishBindingPosition -or
+    $promotionGuardPosition -le $legacyPublishGuardPosition -or
+    $legacyImplementationPosition -le $promotionGuardPosition -or
+    $draftCreatePosition -lt 0 -or $draftPublishPosition -lt 0 -or
     $promotionGuardPosition -gt $draftCreatePosition -or $promotionGuardPosition -gt $draftPublishPosition) {
-    throw 'Der produktive Wrapper ist nicht vor jeder Draft-Erzeugung und -Promotion fail-closed blockiert.'
+    throw 'Der gesperrte Einphasen-Publish-Pfad ist nicht explizit und vor jeder Draft-Erzeugung und -Promotion fail-closed gegated.'
+}
+$legacyImplementationText = $releaseScriptText.Substring($legacyImplementationPosition)
+if ($legacyImplementationText -match '(?<![A-Za-z0-9_])\$Publish(?![A-Za-z0-9_])') {
+    throw 'Der gesperrte Alt-Publish-Code darf nicht direkt vom externen -Publish-Schalter abhaengen.'
 }
 
 foreach ($functionName in @(
         'New-NativeProcessStartInfo',
+        'Invoke-NativeCapture',
         'Invoke-TauriBundle',
         'Build-Sidecar',
         'ConvertTo-GitHubRepositorySlug',
@@ -152,6 +170,18 @@ finally {
     foreach ($secretName in $secretNames) {
         [Environment]::SetEnvironmentVariable($secretName, $originalSecrets[$secretName], 'Process')
     }
+}
+
+$captureProbe = @'
+[Console]::Out.Write('machine-readable-stdout')
+[Console]::Error.Write('diagnostic-stderr')
+exit 0
+'@
+$capturedStdout = Invoke-NativeCapture `
+    -FilePath $pwshPath -WorkingDirectory $repositoryRoot `
+    -Arguments @('-NoProfile', '-Command', $captureProbe)
+if ($capturedStdout -cne 'machine-readable-stdout') {
+    throw 'Invoke-NativeCapture vermischt erfolgreichen stderr weiterhin mit dem maschinenlesbaren stdout.'
 }
 
 function Invoke-NativeCapture {

@@ -637,7 +637,10 @@ function Invoke-NativeCapture {
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
+        # stderr wird absichtlich nur geleert, aber nie mit dem Rueckgabestrom
+        # vermischt. JSON-, Hash- und --jq-Aufrufer erhalten dadurch auch bei
+        # erfolgreichen Warnungen oder Progressmeldungen ausschliesslich stdout.
+        [void]$stderrTask.GetAwaiter().GetResult()
         $exitCode = $process.ExitCode
     }
     finally {
@@ -647,7 +650,7 @@ function Invoke-NativeCapture {
     if ($exitCode -ne 0) {
         throw "Aufruf fehlgeschlagen (Exitcode $exitCode): $FilePath $($Arguments -join ' ')"
     }
-    return (@($stdout, $stderr) -join [Environment]::NewLine).Trim()
+    return $stdout.Trim()
 }
 
 function Get-SourceFingerprint {
@@ -1245,11 +1248,16 @@ foreach ($required in @($cargoManifest, $tauriConfig)) {
     }
 }
 
-if ($Publish) {
+$legacySingleInvocationPublishEnabled = $false
+$executeLegacySingleInvocationPublish = $Publish -and $legacySingleInvocationPublishEnabled
+if ($Publish -and -not $executeLegacySingleInvocationPublish) {
     throw 'Produktiver Release blockiert: Die verpflichtende zweiphasige Clean-Windows-Attestierung und die getrennte Draft-Promotion sind noch nicht implementiert. Es wurde kein Release-Draft erzeugt.'
 }
 
-if ($Publish) {
+# Dieser Altpfad dokumentiert die bereits gehaerteten Draft-Pruefungen, darf aber
+# nicht als Einphasen-Release ausgefuehrt werden. Erst eine getrennte, vom
+# Controller attestierte Promotion darf ihn durch eine neue Architektur ersetzen.
+if ($executeLegacySingleInvocationPublish) {
     if ($ReleaseRepo -ne "einzigTimo/projectatlas-desktop-releases") {
         throw "Produktiver Release blockiert: das attestierte Ziel ist einzigTimo/projectatlas-desktop-releases."
     }
@@ -1304,15 +1312,15 @@ if ($Publish) {
 $cargoPath = Assert-Tool -Name "cargo" -Hint "Rust-Toolchain installieren (rustup)."
 Invoke-Native -FilePath $cargoPath -Arguments @("tauri", "--version")
 
-$authenticodeConfiguration = Resolve-AuthenticodeConfiguration -Required:$Publish
+$authenticodeConfiguration = Resolve-AuthenticodeConfiguration -Required:$executeLegacySingleInvocationPublish
 if (
-    $Publish -and
+    $executeLegacySingleInvocationPublish -and
     $authenticodeConfiguration.Thumbprint -ne $attestedAuthenticodeThumbprint
 ) {
     throw 'Produktiver Release blockiert: das konfigurierte Authenticode-Zertifikat stimmt nicht mit dem von der Develop Zentrale attestierten Herausgeber ueberein.'
 }
 
-if ($Publish) {
+if ($executeLegacySingleInvocationPublish) {
     $ghPath = Assert-Tool -Name "gh" -Hint "GitHub CLI installieren und mit gh auth login anmelden."
     $releaseRepoQualified = "github.com/$ReleaseRepo"
     Invoke-Native -FilePath $ghPath -Arguments @("auth", "status", "--hostname", "github.com")
@@ -1335,7 +1343,7 @@ foreach ($check in @(
         throw "$($check.Name) steht auf $($check.Value), angefordert wurde $Version. Erst die Version in Cargo.toml UND tauri.conf.json auf $Version setzen, dann erneut starten."
     }
 }
-if ($Publish) {
+if ($executeLegacySingleInvocationPublish) {
     $existingReleaseTagCommit = Get-ReleaseTagCommit `
         -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
     if (-not [string]::IsNullOrWhiteSpace([string]$existingReleaseTagCommit)) {
@@ -1530,12 +1538,12 @@ else {
 if (-not $SkipSidecar) {
     Assert-AuthenticodeArtifact `
         -Role 'ProjectAtlas-CLI-Sidecar' -Path $builtSidecarPath `
-        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$Publish
+        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$executeLegacySingleInvocationPublish
 }
 foreach ($artifact in $artifacts) {
     Assert-AuthenticodeArtifact `
         -Role 'Windows-Installer' -Path $artifact.FullName `
-        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$Publish
+        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$executeLegacySingleInvocationPublish
 }
 
 # Ab hier werden fuer alle Release-Entscheidungen ausschliesslich diese direkt
@@ -1559,7 +1567,7 @@ foreach ($upload in $uploads) {
     Write-Host "  $upload ($sizeMb MB)" -ForegroundColor Green
 }
 
-if (-not $Publish) {
+if (-not $executeLegacySingleInvocationPublish) {
     Write-Step "Fertig (nichts veroeffentlicht)"
     Write-Host "Kein Upload durchgefuehrt. Produktive Auslieferungen startet ausschliesslich die Develop Zentrale."
     return
