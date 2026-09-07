@@ -75,7 +75,7 @@ For a bounded manual update or Dependabot review:
 4. Check the repository Rust toolchain and the dependency's MSRV, default and added features, license, advisories, registry or Git source, duplicate paths, upstream changelog, and breaking changes.
 5. Run the focused repository-policy E2E test, the dependency inventory and deny commands above, and the ordinary locked workspace gates.
 
-Weekly Cargo and GitHub Actions Dependabot updates target `main`; only Cargo minor and patch updates are grouped, majors remain separate, and no repository automation merges them. Dependency pull requests follow the same review and locked workspace gates as other changes. Obsolete automated pull requests against the retired `dev` release line are explicitly closed or superseded rather than merged into a release milestone as cleanup.
+Weekly Cargo and GitHub Actions Dependabot updates target `main`; only Cargo minor and patch updates are grouped, majors remain separate, and no repository automation merges them. Dependency pull requests follow the same review and locked workspace gates as other changes; the IssueOps issue-and-milestone gate is not one of them, because a bot has no planning issue to reference and cannot assign a milestone. Obsolete automated pull requests against the retired `dev` release line are explicitly closed or superseded rather than merged into a release milestone as cleanup.
 
 ## Lean implementation and IssueOps
 
@@ -133,7 +133,7 @@ Commit identity is provenance, not a general test invalidation key. After a comm
 - GitHub Actions runs Rust source, dependency, unit, E2E, documentation, and packaging checks. ProjectAtlas scan, purpose, parity, and lint maintenance run locally against the developer or agent's current source state, not against the hosted Actions checkout.
 - `projectatlas lint` checks purpose/header health, non-source declarations, and untracked files; it does not require or validate the optional compatibility TOON export.
 - `projectatlas lint --purpose-level low` is the default first-pass agent gate: duplicate and repeated temporary-folder findings fail, while missing/suggested purpose curation for folders plus high-impact files remains advisory. Use `projectatlas purpose queue` for the actionable curation list, `--purpose-level medium` when all source files must be agent-reviewed, and `--purpose-level strict` only when every indexed file and folder must be agent-reviewed.
-- PRs must reference a GitHub issue and have a milestone.
+- PRs must reference a GitHub issue and have a milestone. This holds for pull requests a person opened; bot-authored pull requests are exempt, because they can satisfy neither requirement and the gate would otherwise fail them before any other check ran.
 - Ordinary PRs may reference an issue without closing it; use `Closes #NNN` only when the issue's complete checklist is ready to close.
 - Active OpenSpec task lists must be mapped in `openspec/issue-map.json`, and their authoritative GitHub task sections must exactly mirror local text, order, ownership, and checked state.
 - In this desktop fork the mapped issues (#276-#473) live in the upstream repository `styler-ai/ProjectAtlas`, so `01-CI` runs only the checklist self-test. Per-issue validation happens in `00-IssueOps`, which scopes the same script with `--planned-issue`.
