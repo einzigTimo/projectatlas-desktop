@@ -4,7 +4,7 @@
     Baut und veroeffentlicht eine Ausgabe von ProjectAtlas Desktop.
 
 .DESCRIPTION
-    Manueller, von Timo ausgeloester Release-Weg fuer das Desktop-Dashboard — getrennt vom
+    Manuell ausgeloester Release-Weg fuer das Desktop-Dashboard — getrennt vom
     CLI/MCP-Release in .github/workflows/release.yml, das dieses Skript nicht anfasst.
 
     Ablauf: Version in Cargo.toml und tauri.conf.json gegenpruefen, projectatlas-cli-Sidecar
@@ -20,6 +20,13 @@
     Version ohne fuehrendes v, z. B. 0.2.0. Muss bereits in
     crates/projectatlas-desktop/Cargo.toml UND tauri.conf.json stehen — das Skript prueft nur,
     es bumpt nicht. Eine Abweichung ist ein Abbruch, keine stille Datei-Aenderung.
+    Ohne Angabe wird die Version aus Cargo.toml gelesen (fuer den Start ueber die
+    Develop Zentrale, die keine Version kennt); tauri.conf.json muss ihr gleichen.
+
+.PARAMETER PreflightArtifact
+    Frisches Preflight-Artefakt der Develop Zentrale. Pflicht bei -Publish: der
+    produktive Release laeuft ausschliesslich ueber die Zentrale
+    (DEPLOY-RICHTLINIE.md im Deployment-Controller), nie direkt ueber dieses Skript.
 
 .PARAMETER NotesFile
     Changelog-Datei, die an gh release create weitergereicht wird. Pflicht bei -Publish.
@@ -49,7 +56,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [ValidatePattern("^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")]
     [string]$Version,
 
@@ -68,7 +75,10 @@ param(
     [switch]$SkipSidecar,
 
     [Parameter(Mandatory = $false)]
-    [switch]$AllowUnsigned
+    [switch]$AllowUnsigned,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PreflightArtifact
 )
 
 Set-StrictMode -Version Latest
@@ -76,7 +86,6 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $sidecarBinaryName = "projectatlas-cli-x86_64-pc-windows-msvc.exe"
-$releaseTag = "v$Version"
 
 function Write-Step {
     param(
@@ -293,11 +302,42 @@ if (-not $hasSigningKey) {
 if ($Publish) {
     $ghPath = Assert-Tool -Name "gh" -Hint "GitHub CLI installieren und mit gh auth login anmelden."
     Invoke-Native -FilePath $ghPath -Arguments @("auth", "status")
+
+    # Produktiver Release nur ueber die Develop Zentrale (DEPLOY-RICHTLINIE.md im
+    # Deployment-Controller): ohne frisches Preflight-Artefakt fail-closed.
+    if ([string]::IsNullOrWhiteSpace($PreflightArtifact)) {
+        throw "Produktiver Release blockiert: -Publish verlangt das Preflight-Artefakt der Develop Zentrale. Einstieg ist die Develop Zentrale, nicht dieses Skript."
+    }
+    & (Join-Path $PSScriptRoot "Assert-ControllerPreflight.ps1") `
+        -ArtifactPath $PreflightArtifact -ProjectRoot $repositoryRoot `
+        -ProjectId "projectatlas-desktop" -ComponentId "desktop-app" `
+        -SourcePath "crates/projectatlas-desktop/Cargo.toml" `
+        -TargetResourceGroup "github-release" -TargetAppName "projectatlas-desktop-releases"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Develop-Zentrale-Preflight ist fehlgeschlagen."
+    }
+
+    # Der veroeffentlichte Stand muss der gepushte Stand sein: sonst zeigt der
+    # spaetere Quell-Tag auf einen Commit, den es auf GitHub nicht gibt.
+    $branchName = (& git -C $repositoryRoot rev-parse --abbrev-ref HEAD | Out-String).Trim()
+    Invoke-Native -FilePath "git" -Arguments @("-C", $repositoryRoot, "fetch", "origin", $branchName, "--prune")
+    $localHead = (& git -C $repositoryRoot rev-parse HEAD | Out-String).Trim()
+    $remoteHead = (& git -C $repositoryRoot rev-parse "origin/$branchName" | Out-String).Trim()
+    if ($localHead -ne $remoteHead) {
+        throw "Produktiver Release blockiert: lokaler Stand $localHead ist nicht der gepushte Stand $remoteHead auf origin/$branchName."
+    }
 }
 
 Write-Step "Versionsnummer gegenpruefen (kein automatischer Bump)"
 $cargoVersion = Get-CargoPackageVersion -Path $cargoManifest
 $configVersion = Get-TauriConfigVersion -Path $tauriConfig
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    # Start ueber die Develop Zentrale: die Zentrale kennt keine Version, die
+    # einzige Versionsquelle ist Cargo.toml (tauri.conf.json muss ihr gleichen).
+    $Version = $cargoVersion
+    Write-Host "Version aus Cargo.toml uebernommen: $Version"
+}
+$releaseTag = "v$Version"
 foreach ($check in @(
         @{ Name = "crates/projectatlas-desktop/Cargo.toml"; Value = $cargoVersion },
         @{ Name = "crates/projectatlas-desktop/tauri.conf.json"; Value = $configVersion })) {
@@ -433,6 +473,25 @@ if ($hasSigningKey) {
 else {
     Write-Warning "Ohne Update-Schluessel gebaut: es wurde KEIN latest.json erzeugt, der Auto-Updater findet diese Ausgabe nicht."
 }
+
+# Das Release-Repo enthaelt keinen Quellcode. Erst der Tag im Quell-Repo macht
+# nachvollziehbar, aus welchem Commit ein veroeffentlichter Installer entstand
+# (DEPLOY-RICHTLINIE.md: Tag nach gruenem Deploy).
+Write-Step "Quell-Commit taggen: desktop-$releaseTag"
+$sourceTag = "desktop-$releaseTag"
+$sourceHead = (& git -C $repositoryRoot rev-parse HEAD | Out-String).Trim()
+$vorhandenerTagCommit = (& git -C $repositoryRoot rev-list -n 1 $sourceTag 2>$null | Out-String).Trim()
+if ($LASTEXITCODE -eq 0 -and $vorhandenerTagCommit) {
+    if ($vorhandenerTagCommit -ne $sourceHead) {
+        throw "Tag $sourceTag existiert bereits auf $vorhandenerTagCommit. Version erhoehen statt Tag verschieben."
+    }
+    Write-Host "Tag $sourceTag steht bereits auf $sourceHead."
+}
+else {
+    Invoke-Native -FilePath "git" -Arguments @("-C", $repositoryRoot, "tag", "-a", $sourceTag, "-m", "ProjectAtlas Desktop $releaseTag", $sourceHead)
+}
+Invoke-Native -FilePath "git" -Arguments @("-C", $repositoryRoot, "push", "origin", $sourceTag)
+Write-Host "Quell-Tag $sourceTag auf $sourceHead gepusht." -ForegroundColor Green
 
 Write-Step "Fertig"
 Write-Host "ProjectAtlas Desktop $releaseTag veroeffentlicht unter $ReleaseRepo." -ForegroundColor Green
