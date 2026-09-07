@@ -36,3 +36,7 @@ tauri-build = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+minisign-verify = "0.2.5"

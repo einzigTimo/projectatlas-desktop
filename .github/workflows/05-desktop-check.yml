@@ -1,17 +1,19 @@
-# Purpose: Compile-check the Windows desktop dashboard.
+# Purpose: Compile and test the Windows desktop dashboard without publishing it.
 
 name: 05-Desktop-Check
 
 # /**
-#  * Purpose: Catch compile errors in projectatlas-desktop before they reach a local test.
+#  * Purpose: Catch Rust regressions and frontend syntax errors before packaging.
 #  */
 
 # 01-CI only runs on main and dev, so nothing verified this fork's working branch.
 # A single Windows job is deliberate: the full 01-CI matrix (verify plus e2e-smoke on
 # four operating systems) would run on every push here and cost far more than the one
-# question this workflow answers — does the desktop app still compile?
+# question this workflow answers — is the desktop app still build- and test-ready?
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -28,7 +30,7 @@ env:
 
 jobs:
   compile:
-    name: desktop compile check
+    name: desktop checks
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -40,6 +42,68 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           rustup default "$RUSTUP_TOOLCHAIN"
 
+      - name: PowerShell-Release-Gates parsen
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $scripts = @(
+            ".github/scripts/Assert-ControllerPreflight.ps1",
+            ".github/scripts/invoke-desktop-release.ps1",
+            "scripts/Test-ProjectAtlasDesktopFirstRun.ps1",
+            "scripts/Test-ProjectAtlasDesktopReleaseGates.ps1"
+          )
+          foreach ($scriptPath in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $scriptPath).Path,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              throw "PowerShell-Parserfehler in ${scriptPath}: $($errors[0].Message)"
+            }
+          }
+
+      - name: Release-Gates verifizieren
+        shell: pwsh
+        run: ./scripts/Test-ProjectAtlasDesktopReleaseGates.ps1
+
+      - name: JavaScript-Syntax pruefen
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $nodePath = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+          $scripts = @(Get-ChildItem -LiteralPath "crates/projectatlas-desktop/frontend/js" -Filter "*.js" -File)
+          if ($scripts.Count -eq 0) {
+            throw "Keine JavaScript-Dateien fuer die Syntaxpruefung gefunden."
+          }
+          foreach ($scriptFile in $scripts) {
+            & $nodePath --check $scriptFile.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "JavaScript-Syntaxpruefung fehlgeschlagen: $($scriptFile.FullName)"
+            }
+          }
+
       - name: Desktop dashboard compile check
         timeout-minutes: 30
         run: cargo check --locked -p projectatlas-desktop --all-features
+
+      - name: Desktop-Tests
+        timeout-minutes: 30
+        run: cargo test --locked -p projectatlas-desktop --all-features
+
+      - name: Updater-Signaturpruefer kompilieren
+        timeout-minutes: 15
+        run: cargo check --locked -p projectatlas-desktop --example verify_updater_signature
+
+      - name: Gebuendelten CLI-Erststart pruefen
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          cargo build --locked --release -p projectatlas-cli --bin projectatlas
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release-Bau des ProjectAtlas-Sidecars ist fehlgeschlagen."
+          }
+          & ./scripts/Test-ProjectAtlasDesktopFirstRun.ps1 `
+            -SidecarPath ./target/release/projectatlas.exe
