@@ -61,8 +61,8 @@ use projectatlas_service::{
 };
 use rmcp::schemars;
 use runtime::{
-    DEFAULT_HEALTH_LIMIT, InitBootstrapOptions, InitHostConfigStatus, InitSetupReport,
-    MAX_HEALTH_LIMIT, MAX_PURPOSE_REVIEW_INPUT_FILE_BYTES, MAX_SYMBOL_FILE_BYTES, PurposeLintLevel,
+    DEFAULT_HEALTH_LIMIT, InitBootstrapOptions, InitHostConfigStatus, MAX_HEALTH_LIMIT,
+    MAX_PURPOSE_REVIEW_INPUT_FILE_BYTES, MAX_SYMBOL_FILE_BYTES, PurposeLintLevel,
     PurposeReviewRequest, ScanRuntimePlan, SettingsReport, SourceObservationRegistry,
     SymbolBuildOptions, UsageRuntimeInstance, WatchStatusReport, absolute_path,
     build_settings_report, byte_count_to_tokens, canonical_project_root,
@@ -78,10 +78,10 @@ use runtime::{
     record_usage_text, render_classified_ranked_file_rows, render_classified_symbol_rows,
     render_coverage_report, render_health_page, render_purpose_curation_page,
     render_purpose_review_report, reset_index_files, resolved_mcp_config_path, review_purposes,
-    run_init_bootstrap, run_scan_pipeline_controlled, run_single_watch_refresh_controlled,
-    run_symbol_build_pipeline_controlled, run_watch_loop, standalone_index_work_control,
-    strip_legacy_purpose, validate_purpose_review_admission, validated_indexed_file_key,
-    watcher_status_report,
+    run_init_bootstrap_with_host_configs, run_scan_pipeline_controlled,
+    run_single_watch_refresh_controlled, run_symbol_build_pipeline_controlled, run_watch_loop,
+    standalone_index_work_control, strip_legacy_purpose, validate_purpose_review_admission,
+    validated_indexed_file_key, watcher_status_report,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1691,7 +1691,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 root.join(&cli.db)
             };
             let config_path = init_config_path(&root, cli.config.as_deref());
-            let mut report = run_init_bootstrap(
+            let report = run_init_bootstrap_with_host_configs(
                 &root,
                 &db_path,
                 Some(&config_path),
@@ -1700,14 +1700,15 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                     force_rescan: *force_rescan,
                     text_index_max_bytes: *text_index_max_bytes,
                 },
+                &mut |root, config_path| {
+                    init_mcp_config_statuses(
+                        &root.join(".projectatlas"),
+                        &db_path,
+                        config_path,
+                        false,
+                    )
+                },
             )?;
-            write_init_mcp_config_files(
-                &mut report,
-                &root.join(".projectatlas"),
-                &db_path,
-                &config_path,
-                false,
-            );
             print_output(
                 cli.format,
                 &encode_agent_payload(&json!({ "init": report })),
@@ -3653,13 +3654,17 @@ fn bind_project_root(
 }
 
 /// Write all generated host MCP configs expected after first-run init.
-fn write_init_mcp_config_files(
-    report: &mut InitSetupReport,
+///
+/// Returns one status per generated file instead of mutating a report, so init
+/// can generate the configs before the scan and still fold the outcome into the
+/// report it builds afterwards. A `Failed` entry marks the whole init run failed.
+fn init_mcp_config_statuses(
     atlas_dir: &Path,
     db_path: &Path,
     config_path: &Path,
     nearest_project: bool,
-) {
+) -> Vec<InitHostConfigStatus> {
+    let mut host_configs = Vec::new();
     for (harness_name, file_name, harness) in [
         ("mcp_json", "projectatlas.mcp.json", HarnessConfig::McpJson),
         (
@@ -3678,12 +3683,9 @@ fn write_init_mcp_config_files(
         let (status, error) =
             match write_mcp_config_file(&path, harness, db_path, config_path, nearest_project) {
                 Ok(()) => (init_path_status(existed), None),
-                Err(error) => {
-                    report.ok = false;
-                    (runtime::InitPhaseStatus::Failed, Some(error.to_string()))
-                }
+                Err(error) => (runtime::InitPhaseStatus::Failed, Some(error.to_string())),
             };
-        report.host_configs.push(InitHostConfigStatus {
+        host_configs.push(InitHostConfigStatus {
             harness: harness_name,
             status,
             path: normalize_native_path_display(path),
@@ -3695,23 +3697,16 @@ fn write_init_mcp_config_files(
         let (status, error) =
             match merge_project_claude_mcp_config(root, db_path, config_path, nearest_project) {
                 Ok(status) => (status, None),
-                Err(error) => {
-                    report.ok = false;
-                    (runtime::InitPhaseStatus::Failed, Some(error.to_string()))
-                }
+                Err(error) => (runtime::InitPhaseStatus::Failed, Some(error.to_string())),
             };
-        report.host_configs.push(InitHostConfigStatus {
+        host_configs.push(InitHostConfigStatus {
             harness: "claude_code_project",
             status,
             path: normalize_native_path_display(path),
             error,
         });
     }
-    if !report.ok {
-        report
-            .next_steps
-            .push("Fix generated host MCP config errors and rerun projectatlas init.".to_string());
-    }
+    host_configs
 }
 
 /// File name Claude Code auto-loads for project-scoped MCP servers.

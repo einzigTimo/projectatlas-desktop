@@ -7,32 +7,33 @@ use crate::atlas_map::{
     load_atlas_config_for_root, remove_ignore_entry, write_map,
 };
 use crate::runtime::{
-    DEFAULT_HEALTH_LIMIT, INDEX_WORKER_SAFE_CEILING, IndexInitRequired, IndexProjectMismatch,
-    IndexRefreshRequired, IndexVerificationIncomplete, InitBootstrapOptions, InitHydrationPhase,
-    InitHydrationStatus, InitPhaseStatus, InitScanPhase, InitSetupReport, MAX_HEALTH_LIMIT,
-    MAX_SYMBOL_FILE_BYTES, ProjectWorktreeRequired, PurposeCuratorHandoff, PurposeLintLevel,
-    PurposeReviewRequest, ResetIndexReport, ScanReport, ScanRuntimePlan,
-    SettingsClassifiedNavigationReport, SourceObservationRegistry, SymbolBuildOptions,
-    UsageRuntimeInstance, VerifiedReadOutcome, VerifiedReadStamp, build_settings_report,
-    byte_count_to_tokens, canonical_project_root, canonical_source_project_root,
-    classified_navigation_capabilities, classified_ranked_file_nodes_with_reasons,
-    config_root_mismatch_error, default_mcp_project_root,
-    estimated_source_tokens_for_indexed_files, estimated_source_tokens_for_paths,
-    federated_worktree_error, index_init_required, index_work_control, init_config_path,
-    init_next_steps, lint_project, load_synchronized_repository_token_report,
-    next_step_report_payload, next_step_report_with_selection, normalized_folder_filter,
-    open_atlas_store_for_project, open_atlas_store_read_only_for_project,
-    open_federated_atlas_stores_for_project, purpose_curation_page, purpose_curator_handoff,
-    ranked_file_nodes_with_reasons, ranked_folder_nodes_with_reasons, read_indexed_file_content,
+    DEFAULT_HEALTH_LIMIT, INDEX_WORKER_SAFE_CEILING, INIT_HOST_CONFIG_FAILURE_NEXT_STEP,
+    IndexInitRequired, IndexProjectMismatch, IndexRefreshRequired, IndexVerificationIncomplete,
+    InitBootstrapOptions, InitHostConfigStatus, InitHydrationPhase, InitHydrationStatus,
+    InitPhaseStatus, InitScanPhase, InitSetupReport, MAX_HEALTH_LIMIT, MAX_SYMBOL_FILE_BYTES,
+    ProjectWorktreeRequired, PurposeCuratorHandoff, PurposeLintLevel, PurposeReviewRequest,
+    ResetIndexReport, ScanReport, ScanRuntimePlan, SettingsClassifiedNavigationReport,
+    SourceObservationRegistry, SymbolBuildOptions, UsageRuntimeInstance, VerifiedReadOutcome,
+    VerifiedReadStamp, build_settings_report, byte_count_to_tokens, canonical_project_root,
+    canonical_source_project_root, classified_navigation_capabilities,
+    classified_ranked_file_nodes_with_reasons, config_root_mismatch_error,
+    default_mcp_project_root, estimated_source_tokens_for_indexed_files,
+    estimated_source_tokens_for_paths, federated_worktree_error, index_init_required,
+    index_work_control, init_config_path, init_next_steps, lint_project,
+    load_synchronized_repository_token_report, next_step_report_payload,
+    next_step_report_with_selection, normalized_folder_filter, open_atlas_store_for_project,
+    open_atlas_store_read_only_for_project, open_federated_atlas_stores_for_project,
+    purpose_curation_page, purpose_curator_handoff, ranked_file_nodes_with_reasons,
+    ranked_folder_nodes_with_reasons, read_indexed_file_content,
     reconcile_hydrated_index_controlled, record_directory_walk_usage_estimate,
     record_usage_estimate, record_usage_text, render_classified_ranked_file_rows,
     render_classified_symbol_rows, render_health_page, render_purpose_curation_page,
     render_purpose_review_report, require_current_worktree_usage_snapshot,
     require_registered_worktree_lifecycle, reset_index_files, reset_index_files_with_revalidation,
-    review_purposes, run_init_bootstrap, run_scan_pipeline_controlled,
-    run_single_watch_refresh_controlled, run_symbol_build_pipeline_controlled,
-    strip_legacy_purpose, telemetry_disabled, validate_purpose_review_admission,
-    validated_indexed_file_key, watcher_status_report,
+    review_purposes, run_init_bootstrap, run_init_bootstrap_with_host_configs,
+    run_scan_pipeline_controlled, run_single_watch_refresh_controlled,
+    run_symbol_build_pipeline_controlled, strip_legacy_purpose, telemetry_disabled,
+    validate_purpose_review_admission, validated_indexed_file_key, watcher_status_report,
 };
 #[cfg(test)]
 use crate::runtime::{
@@ -4441,27 +4442,43 @@ impl ProjectAtlasMcpServer {
     }
 
     /// Initialize one registered worktree, preferring a reconciled control-atlas baseline.
+    ///
+    /// `write_host_configs` is invoked exactly once, on whichever path this call
+    /// takes, and always before that path indexes the project: one generated
+    /// file, `<root>/.mcp.json`, is itself indexed source, so writing it after
+    /// the scan would leave the fresh index reporting `refresh_required`.
     fn run_registered_worktree_init(
         &self,
         state: &McpProjectState,
         config_path: &Path,
         options: &InitBootstrapOptions,
+        write_host_configs: &mut dyn FnMut(&Path, &Path) -> Vec<InitHostConfigStatus>,
     ) -> Result<InitSetupReport, CliError> {
         let Some(selection) = state
             .worktree
             .as_ref()
             .filter(|selection| selection.registration_id.is_some())
         else {
-            let report =
-                run_init_bootstrap(&state.root, &state.db_path, Some(config_path), options)?;
+            let report = run_init_bootstrap_with_host_configs(
+                &state.root,
+                &state.db_path,
+                Some(config_path),
+                options,
+                write_host_configs,
+            )?;
             if report.ok {
                 self.bind_initialized_registration_for_root(state)?;
             }
             return Ok(report);
         };
         if state.db_path.is_file() {
-            let mut report =
-                run_init_bootstrap(&state.root, &state.db_path, Some(config_path), options)?;
+            let mut report = run_init_bootstrap_with_host_configs(
+                &state.root,
+                &state.db_path,
+                Some(config_path),
+                options,
+                write_host_configs,
+            )?;
             report.hydration = Some(InitHydrationPhase {
                 status: InitHydrationStatus::Existing,
                 source_root: None,
@@ -4483,6 +4500,12 @@ impl ProjectAtlasMcpServer {
         let config_existed = config_path.exists();
         let nonsource_existed = nonsource_file.exists();
         init_project_with_config(&state.root, Some(config_path))?;
+        // Generate the host configs before hydration or scan, for the same
+        // reason the bootstrap does: `.mcp.json` is indexed source.
+        let host_configs = write_host_configs(&state.root, config_path);
+        let host_configs_failed = host_configs
+            .iter()
+            .any(|entry| entry.status == InitPhaseStatus::Failed);
 
         let hydration = if options.no_scan {
             McpWorktreeHydration::Fallback(MCP_HYDRATION_NO_SCAN_REASON.to_string())
@@ -4544,6 +4567,13 @@ impl ProjectAtlasMcpServer {
             InitPhaseStatus::Created
         };
         report.db.status = InitPhaseStatus::Created;
+        report.host_configs = host_configs;
+        if host_configs_failed {
+            report.ok = false;
+            report
+                .next_steps
+                .push(INIT_HOST_CONFIG_FAILURE_NEXT_STEP.to_string());
+        }
         if report.ok {
             self.bind_initialized_worktree(selection, state)?;
         }
@@ -8162,7 +8192,8 @@ impl ProjectAtlasMcpServer {
         Self::as_mcp_text((|| {
             let state = self.init_project_root(params.project_path, params.worktree)?;
             let config_path = init_config_path(&state.root, state.config_path.as_deref());
-            let mut report = self.run_registered_worktree_init(
+            let db_path = state.db_path.clone();
+            let report = self.run_registered_worktree_init(
                 &state,
                 &config_path,
                 &InitBootstrapOptions {
@@ -8170,14 +8201,15 @@ impl ProjectAtlasMcpServer {
                     force_rescan: params.force_rescan.unwrap_or(false),
                     text_index_max_bytes: params.text_index_max_bytes,
                 },
+                &mut |root, config_path| {
+                    crate::init_mcp_config_statuses(
+                        &root.join(PROJECTATLAS_DIR_NAME),
+                        &db_path,
+                        config_path,
+                        false,
+                    )
+                },
             )?;
-            crate::write_init_mcp_config_files(
-                &mut report,
-                &state.root.join(PROJECTATLAS_DIR_NAME),
-                &state.db_path,
-                &config_path,
-                false,
-            );
             Self::encode_named_payload(MCP_PAYLOAD_INIT, &report)
         })())
     }

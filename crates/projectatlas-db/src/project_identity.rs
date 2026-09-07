@@ -1231,7 +1231,17 @@ mod tests {
 
     /// Assert the current project report without reading schema-private raw columns.
     fn assert_usage_report(store: &AtlasStore, retained: bool) -> Result<(), Box<dyn Error>> {
-        let events = store.usage_events(Some("identity-test"))?;
+        // Der Schreibzeitpunkt entsteht erst beim Speichern und ist nicht
+        // vorhersagbar. Verglichen wird der fachliche Inhalt des Ereignisses,
+        // deshalb wird nur dieses eine Feld auf den Erwartungswert gesetzt.
+        let events = store
+            .usage_events(Some("identity-test"))?
+            .into_iter()
+            .map(|mut event| {
+                event.created_at_epoch = 0;
+                event
+            })
+            .collect::<Vec<_>>();
         let overview = store.token_overview(Some("identity-test"))?;
         if retained {
             require_eq(
