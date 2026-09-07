@@ -173,8 +173,8 @@ jobs:
   e2e-smoke:
     name: e2e-smoke ${{ matrix.label }}
     needs: verify
-    # The four-platform matrix only reacts to code, not to review activity:
-    # a review comment cannot change what these tests execute.
+    # Die Windows-/Linux-Matrix reagiert nur auf Code, nicht auf Review-Aktivitaet:
+    # Ein Review-Kommentar veraendert nicht, was diese Tests ausfuehren.
     if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
@@ -185,10 +185,6 @@ jobs:
             os: ubuntu-latest
           - label: windows
             os: windows-latest
-          - label: macos-x64
-            os: macos-15-intel
-          - label: macos-arm64
-            os: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

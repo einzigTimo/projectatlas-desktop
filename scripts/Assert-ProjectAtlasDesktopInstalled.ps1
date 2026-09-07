@@ -26,7 +26,9 @@ try {
         $receipt.version -cne $package.Manifest.version -or $receipt.packageManifestSha256 -cne $package.ManifestHash -or
         $receipt.certificateThumbprint -ine $package.Manifest.certificateThumbprint -or
         -not (Test-AtlasSamePath $receipt.installPath (Get-AtlasLocalInstallDirectory)) -or
-        -not (Test-AtlasSamePath $receipt.preflightPath $PreflightArtifact) -or $receipt.preflightSha256 -cne (Get-AtlasFileHash $PreflightArtifact) -or
+        -not (Test-AtlasSamePath $receipt.preflightPath $PreflightArtifact) -or
+        $receipt.preflightSha256 -isnot [string] -or $receipt.preflightSha256 -cnotmatch '\A[0-9a-fA-F]{64}\z' -or
+        $receipt.preflightSha256 -ine (Get-AtlasFileHash $PreflightArtifact) -or
         $receipt.runId -cne $preflight.run_id -or $preflight.expected_commit -cne $ExpectedCommit -or
         $preflight.project_id -cne 'projectatlas-desktop' -or $preflight.component_id -cne 'desktop-app' -or $preflight.environment -cne 'prod' -or
         $preflight.target_resource_group -cne 'local-windows' -or $preflight.target_app_name -cne 'projectatlas-desktop-local') {

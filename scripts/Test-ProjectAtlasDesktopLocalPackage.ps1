@@ -91,6 +91,39 @@ $errors = $null
 $releaseAst = [Management.Automation.Language.Parser]::ParseFile($releasePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw 'Der Release-Wrapper kann fuer den Pakettest nicht geparst werden.' }
 
+# Mehrere Anwendungen mit gleichem Namen muessen genau den ersten PATH-Treffer
+# ergeben. Die synthetischen Treffer veraendern weder PATH noch echte Programme.
+& {
+    . ([scriptblock]::Create((Get-TestDefinition -Ast $releaseAst -Name 'Assert-Tool')))
+    & {
+        $script:toolMatches = @()
+        function Get-Command {
+            [CmdletBinding()]
+            param([string]$Name, [Management.Automation.CommandTypes]$CommandType)
+            if ($Name -cne 'pwsh-test' -or $CommandType -ne [Management.Automation.CommandTypes]::Application) {
+                throw 'Die Werkzeugaufloesung muss ausschliesslich die angeforderte Anwendung suchen.'
+            }
+            $script:toolMatches
+        }
+        Assert-TestRejected -Action { Assert-Tool -Name 'pwsh-test' -Hint 'Testhinweis' } `
+            -ExpectedMessage 'Benoetigtes Werkzeug fehlt im PATH: pwsh-test. Testhinweis' -Scenario 'Kein Anwendungstreffer'
+        $firstPath = 'C:\synthetische-tools\erster\pwsh.exe'
+        $secondPath = 'C:\synthetische-tools\zweiter\pwsh.exe'
+        foreach ($count in @(1, 2)) {
+            $script:toolMatches = @([pscustomobject]@{ Source = $firstPath })
+            if ($count -eq 2) { $script:toolMatches += [pscustomobject]@{ Source = $secondPath } }
+            $resolved = Assert-Tool -Name 'pwsh-test' -Hint 'Testhinweis'
+            if ($resolved -isnot [string] -or $resolved -cne $firstPath) {
+                throw "Die Werkzeugaufloesung liefert bei $count Treffern nicht genau den ersten Anwendungspfad als String."
+            }
+        }
+    }
+    $resolvedPwsh = Assert-Tool -Name 'pwsh' -Hint 'PowerShell ist fuer den lokalen Test erforderlich.'
+    if ($resolvedPwsh -isnot [string] -or $resolvedPwsh -cne $pwshPath) {
+        throw 'Die echte lokale PowerShell-Aufloesung liefert nicht genau den ersten Anwendungspfad als String.'
+    }
+}
+
 # Nur die Betriebssystemgrenze der Zertifikatskette wird ersetzt. Die komplette
 # Auswahl-, URL- und Vertrauenslogik der echten Funktion bleibt Bestandteil des Tests.
 & {
