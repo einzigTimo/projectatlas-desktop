@@ -2,6 +2,14 @@
 on:
   push: { branches: [ "main" ] }
   pull_request: { branches: [ "main" ] }
+# Kostenbremse (07.09.2026): Der PR-Trigger bleibt bewusst stehen -- `analyze`
+# ist im Ruleset "protect-main" ein PFLICHT-Check. Wuerde er bei Pull Requests
+# nicht mehr laufen, bliebe jeder PR dauerhaft blockiert. Gespart wird deshalb
+# ueber cancel-in-progress statt ueber weniger Ausloeser.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     runs-on: ubuntu-latest

@@ -11,11 +11,16 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
   workflow_dispatch:
+
+# Kostenbremse (07.09.2026): Ohne diese Gruppe lief JEDER ueberholte Lauf voll
+# durch -- gemessen am 07.09. liefen fuenf Laeufe dieses Repos gleichzeitig,
+# darunter zwei 01-CI im Abstand von zwei Minuten. Die Vier-OS-Matrix macht das
+# besonders teuer (macOS zaehlt 10x, Windows 2x). cancel-in-progress gibt den
+# Runner-Slot eines ueberholten Commits sofort frei.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
