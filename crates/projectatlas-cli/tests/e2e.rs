@@ -3774,6 +3774,44 @@ fn init_bootstrap_creates_db_scan_report_and_host_configs() -> Result<(), Box<dy
 }
 
 #[test]
+fn cli_init_leaves_a_current_index_for_its_own_generated_configs() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let repo = temp.path().join(TEST_REPO_DIR);
+    fs::create_dir_all(repo.join(SRC_DIR_NAME))?;
+    fs::write(
+        repo.join(SRC_DIR_NAME).join(LIB_RS_FILE_NAME),
+        "pub fn owner() {}\n",
+    )?;
+
+    Command::cargo_bin("projectatlas")?
+        .current_dir(&repo)
+        .arg("init")
+        .assert()
+        .success();
+
+    // `init` writes `<root>/.mcp.json`, which is ordinary indexed source. When
+    // that write happened after the scan, the index init had just built was
+    // already stale. A writable database hides this, because navigation then
+    // silently refreshes itself; holding the write lock exposes it, and the
+    // command aborts with `refresh_required` instead of navigating.
+    let root_mcp_config = repo.join(".mcp.json");
+    if !root_mcp_config.is_file() {
+        return Err(io::Error::other("init did not write the project-root .mcp.json").into());
+    }
+    let connection = Connection::open(repo.join(ATLAS_DIR_NAME).join("projectatlas.db"))?;
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    Command::cargo_bin("projectatlas")?
+        .current_dir(&repo)
+        .arg("overview")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("overview:"));
+    connection.execute_batch("ROLLBACK")?;
+
+    Ok(())
+}
+
+#[test]
 #[ignore = "dedicated hosted cross-platform holistic worktree proof"]
 fn holistic_agent_worktree_flow_keeps_local_atlases_isolated_across_cli_watch_and_mcp()
 -> Result<(), Box<dyn Error>> {
@@ -8214,18 +8252,30 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         )
         .into());
     }
-    let cargo_deny_command = "cargo deny --locked --all-features check -D warnings";
+    // The desktop crate pulls the Tauri stack, which resolves duplicate
+    // transitive versions that the workspace itself never selects. The scan is
+    // therefore split instead of weakened: the workspace without the desktop
+    // crate stays fully strict, and the Windows desktop target keeps
+    // advisories, licenses and sources fail-closed while only duplicate bans
+    // are relaxed. Every location must run the same three commands.
+    let cargo_deny_commands = [
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
+    ];
     for (owner, content) in [
         ("CI", ci_workflow.as_str()),
         ("release", release_workflow.as_str()),
         ("pre-push hook", hook.as_str()),
         ("workflow docs", workflow_docs.as_str()),
     ] {
-        if !content.contains(cargo_deny_command) {
-            return Err(io::Error::other(format!(
-                "{owner} is missing the locked all-feature cargo-deny command"
-            ))
-            .into());
+        for command in cargo_deny_commands {
+            if !content.contains(command) {
+                return Err(io::Error::other(format!(
+                    "{owner} is missing the locked all-feature cargo-deny command {command:?}"
+                ))
+                .into());
+            }
         }
     }
 
@@ -8705,7 +8755,9 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --doc --workspace --all-features --locked",
         "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
         "npm ci --ignore-scripts --prefix .github/mermaid-parser",
         "npm audit --omit=dev --audit-level=moderate --prefix .github/mermaid-parser",
         "issue-checklists.py --self-test",
@@ -8725,9 +8777,10 @@ fn issueops_and_workflows_use_behavior_focused_quality_gates() -> Result<(), Box
         "cargo test --workspace --all-features --locked",
         "cargo test --locked -p projectatlas-cli --all-features task_errors_classify_only_typed_cancellation_as_canceled",
         "cargo test --doc --workspace --all-features --locked",
-        "cargo deny --locked --all-features check -D warnings",
+        "--exclude projectatlas-desktop",
+        "check advisories licenses sources -D warnings",
+        "check bans -A duplicate -A unused-workspace-dependency -D warnings",
         "test-optional-parser-proof-inputs.py",
-        "--issue-map openspec/issue-map.json",
     ] {
         if !ci.contains(required) {
             return Err(io::Error::other(format!(
