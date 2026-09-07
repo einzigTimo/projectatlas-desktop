@@ -7763,7 +7763,7 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
     }
     if !auto_release_workflow.contains("promotion_sha=\"$(git rev-parse 'HEAD^{commit}')\"")
         || !auto_release_workflow.contains("[[ \"$promotion_sha\" != \"$GITHUB_SHA\" ]]")
-        || !auto_release_workflow.contains("--ref main")
+        || !auto_release_workflow.contains("push:\n    branches: [main]")
         || auto_release_workflow.contains("HEAD^2")
     {
         return Err(io::Error::other("auto-release must preserve promotion identity").into());
@@ -8556,11 +8556,25 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
         "git rev-parse 'HEAD^{commit}'",
         "Auto-release checkout differs from the exact main push",
         "resolve-optional-parser-handoff.py",
-        "--field parser_pack_run_id=",
+        "run_id=$parser_pack_run_id",
+        "GITHUB_STEP_SUMMARY",
     ] {
         if !auto_release_workflow.contains(required) {
             return Err(io::Error::other(format!(
                 "auto-release workflow is missing input-bound optional-parser handoff guard {required:?}"
+            ))
+            .into());
+        }
+    }
+    for forbidden in [
+        "actions: write",
+        "gh workflow run",
+        "gh release ",
+        "git push",
+    ] {
+        if auto_release_workflow.contains(forbidden) {
+            return Err(io::Error::other(format!(
+                "release-readiness workflow retains forbidden mutation {forbidden:?}"
             ))
             .into());
         }
@@ -8589,9 +8603,9 @@ fn repository_delivery_and_dependency_policy_is_enforced() -> Result<(), Box<dyn
             .into());
         }
     }
-    if !auto_release_workflow.contains("permissions:\n  contents: read\n  actions: write") {
+    if !auto_release_workflow.contains("permissions:\n  contents: read\n  actions: read") {
         return Err(io::Error::other(
-            "auto-release workflow must narrow permissions to contents read and actions write",
+            "release-readiness workflow must use read-only contents and actions permissions",
         )
         .into());
     }
