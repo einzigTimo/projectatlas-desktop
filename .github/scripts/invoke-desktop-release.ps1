@@ -90,7 +90,13 @@ param(
     [switch]$AllowUnsignedUpdater,
 
     [Parameter(Mandatory = $false)]
-    [string]$PreflightArtifact
+    [string]$PreflightArtifact,
+
+    # Nur ein lokaler Paketbau, niemals Installation oder Veroeffentlichung.
+    [switch]$PrepareLocalPackage,
+
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$ExpectedCommit
 )
 
 Set-StrictMode -Version Latest
@@ -322,7 +328,9 @@ function Resolve-WindowsSignTool {
 function Resolve-AuthenticodeConfiguration {
     param(
         [Parameter(Mandatory = $false)]
-        [switch]$Required
+        [switch]$Required,
+
+        [switch]$LocalTrustOnly
     )
 
     $thumbprintValue = [System.Environment]::GetEnvironmentVariable(
@@ -350,12 +358,17 @@ function Resolve-AuthenticodeConfiguration {
 
         $thumbprint = Get-NormalizedCertificateThumbprint -Value $thumbprintValue
         $timestampUri = $null
-        if (
-            -not [Uri]::TryCreate($timestampValue, [UriKind]::Absolute, [ref]$timestampUri) -or
-            $timestampUri.Scheme -ne [Uri]::UriSchemeHttps -or
-            -not [string]::IsNullOrEmpty($timestampUri.UserInfo)
-        ) {
-            throw 'PROJECTATLAS_AUTHENTICODE_TIMESTAMP_URL muss eine absolute HTTPS-Adresse ohne eingebettete Zugangsdaten sein.'
+        if (-not [Uri]::TryCreate($timestampValue, [UriKind]::Absolute, [ref]$timestampUri) -or
+            -not [string]::IsNullOrEmpty($timestampUri.UserInfo)) {
+            throw 'PROJECTATLAS_AUTHENTICODE_TIMESTAMP_URL muss eine absolute Zeitstempeladresse ohne Zugangsdaten sein.'
+        }
+        # SignTool akzeptiert auf diesem Windows-SDK keine HTTPS-TSA-URL. Ausschliesslich
+        # der lokale Modus darf den von Microsoft/DigiCert dokumentierten RFC3161-Endpunkt
+        # verwenden. Er erhaelt nur den Digest; die Antwort wird kryptografisch verifiziert.
+        $allowedLocalTimestamp = $LocalTrustOnly -and
+            $timestampUri.AbsoluteUri -ceq 'http://timestamp.digicert.com/'
+        if ($timestampUri.Scheme -ne [Uri]::UriSchemeHttps -and -not $allowedLocalTimestamp) {
+            throw 'Zeitstempeladresse nicht zugelassen: HTTPS oder im lokalen Modus ausschliesslich der festgelegte DigiCert-RFC3161-Endpunkt.'
         }
 
         # Tauri ruft signtool mit /sha1, aber ohne /sm auf und sucht deshalb im
@@ -372,8 +385,18 @@ function Resolve-AuthenticodeConfiguration {
         if ($certificate.NotBefore.ToUniversalTime() -gt $now -or $certificate.NotAfter.ToUniversalTime() -le $now) {
             throw 'Das angegebene Authenticode-Zertifikat ist noch nicht oder nicht mehr gueltig.'
         }
-        if ($certificate.Subject -eq $certificate.Issuer) {
+        if ($certificate.Subject -eq $certificate.Issuer -and -not $LocalTrustOnly) {
             throw 'Ein selbstsigniertes Authenticode-Zertifikat ist fuer Kolleg:innen-Ausgaben nicht zulaessig.'
+        }
+
+        if ($LocalTrustOnly) {
+            $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+            try {
+                if (-not $chain.Build($certificate)) {
+                    throw 'Das lokale Herausgeberzertifikat ist auf diesem Windows-Rechner nicht bereits vertrauenswuerdig.'
+                }
+            }
+            finally { $chain.Dispose() }
         }
 
         if (-not (Test-CodeSigningCertificateUsage -Certificate $certificate)) {
@@ -406,7 +429,9 @@ function Get-AuthenticodeAssessment {
         [string]$Path,
 
         [Parameter(Mandatory = $false)]
-        [string]$ExpectedThumbprint
+        [string]$ExpectedThumbprint,
+
+        [switch]$LocalTrustOnly
     )
 
     $problems = [System.Collections.Generic.List[string]]::new()
@@ -430,7 +455,7 @@ function Get-AuthenticodeAssessment {
         ) {
             $problems.Add('Herausgeberzertifikat stimmt nicht mit dem freigegebenen Thumbprint ueberein')
         }
-        if ($signature.SignerCertificate.Subject -eq $signature.SignerCertificate.Issuer) {
+        if ($signature.SignerCertificate.Subject -eq $signature.SignerCertificate.Issuer -and -not $LocalTrustOnly) {
             $problems.Add('Herausgeberzertifikat ist selbstsigniert')
         }
         if (-not (Test-CodeSigningCertificateUsage -Certificate $signature.SignerCertificate)) {
@@ -459,10 +484,12 @@ function Assert-AuthenticodeArtifact {
         [string]$ExpectedThumbprint,
 
         [Parameter(Mandatory = $false)]
-        [switch]$Required
+        [switch]$Required,
+
+        [switch]$LocalTrustOnly
     )
 
-    $assessment = Get-AuthenticodeAssessment -Path $Path -ExpectedThumbprint $ExpectedThumbprint
+    $assessment = Get-AuthenticodeAssessment -Path $Path -ExpectedThumbprint $ExpectedThumbprint -LocalTrustOnly:$LocalTrustOnly
     if ($assessment.Valid) {
         Write-Host "${Role}: gueltige Windows-Authenticode-Signatur und Zeitstempel." -ForegroundColor Green
         return
@@ -593,6 +620,12 @@ Write-Step "Voraussetzungen pruefen"
 
 if (-not $IsWindows) {
     throw "Dieses Skript baut einen Windows-Installer und laeuft nur unter Windows."
+}
+if ($PrepareLocalPackage -and ($Publish -or $SkipSidecar -or $AllowUnsignedUpdater)) {
+    throw '-PrepareLocalPackage ist nicht mit -Publish, -SkipSidecar oder -AllowUnsignedUpdater kombinierbar.'
+}
+if ($PrepareLocalPackage -and [string]::IsNullOrWhiteSpace($ExpectedCommit)) {
+    throw '-PrepareLocalPackage verlangt einen exakten -ExpectedCommit.'
 }
 # Argumente zuerst pruefen: widerspruechliche Schalter sollen gemeldet werden, bevor
 # irgendetwas am Dateisystem oder an der Werkzeugkette haengt.
@@ -1529,7 +1562,8 @@ if ($executeLegacySingleInvocationPublish) {
 $cargoPath = Assert-Tool -Name "cargo" -Hint "Rust-Toolchain installieren (rustup)."
 Invoke-Native -FilePath $cargoPath -Arguments @("tauri", "--version")
 
-$authenticodeConfiguration = Resolve-AuthenticodeConfiguration -Required:$executeLegacySingleInvocationPublish
+$authenticodeConfiguration = Resolve-AuthenticodeConfiguration `
+    -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 if (
     $executeLegacySingleInvocationPublish -and
     $authenticodeConfiguration.Thumbprint -ne $attestedAuthenticodeThumbprint
@@ -1569,6 +1603,13 @@ if ($executeLegacySingleInvocationPublish) {
 }
 Write-Host "Version $Version bestaetigt in Cargo.toml und tauri.conf.json." -ForegroundColor Green
 Write-Host "Windows Authenticode konfiguriert: $($null -ne $authenticodeConfiguration ? 'ja' : 'nein')"
+
+$localPackageBuild = $null
+if ($PrepareLocalPackage) {
+    . (Join-Path $PSScriptRoot 'ProjectAtlasLocalPackage.ps1')
+    Assert-AtlasLocalBuildSource -Root $repositoryRoot -ExpectedCommit $ExpectedCommit
+    $localPackageBuild = New-AtlasLocalPackageBuild -Root $repositoryRoot -ExpectedCommit $ExpectedCommit
+}
 
 # Eingebettete Pfade neutralisieren: Rust schreibt absolute Quellpfade (samt
 # Windows-Benutzername) in Panik-Texte und Debug-Infos jedes Binaries. Ohne die
@@ -1682,6 +1723,14 @@ if ($null -ne $authenticodeConfiguration) {
         tsp                   = $true
     }
 }
+if ($PrepareLocalPackage) {
+    # Der reine Compile-Hook sichert die signierte, fuer NSIS gepatchte Haupt-EXE,
+    # bevor Tauri target/release wieder auf den unsignierten Stand zuruecksetzt.
+    $bundleOverlay.windows.nsis = @{ installerHooks = $localPackageBuild.HookPath }
+    # Persönliches Upgrade einer lauffaehigen Installation: keine Fremdinstallation
+    # von WebView2 im Rollback-Transaktionsfenster. Fehlt die Runtime, blockiert der Precheck.
+    $bundleOverlay.windows.webviewInstallMode = @{ type = 'skip' }
+}
 if ($bundleOverlay.Count -gt 0) {
     $buildOverlay = [ordered]@{ bundle = $bundleOverlay }
     $bundleArguments += @(
@@ -1755,12 +1804,14 @@ else {
 if (-not $SkipSidecar) {
     Assert-AuthenticodeArtifact `
         -Role 'ProjectAtlas-CLI-Sidecar' -Path $builtSidecarPath `
-        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$executeLegacySingleInvocationPublish
+        -ExpectedThumbprint $expectedAuthenticodeThumbprint `
+        -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 }
 foreach ($artifact in $artifacts) {
     Assert-AuthenticodeArtifact `
         -Role 'Windows-Installer' -Path $artifact.FullName `
-        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required:$executeLegacySingleInvocationPublish
+        -ExpectedThumbprint $expectedAuthenticodeThumbprint `
+        -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 }
 
 # Ab hier werden fuer alle Release-Entscheidungen ausschliesslich diese direkt
@@ -1768,6 +1819,16 @@ foreach ($artifact in $artifacts) {
 # verwendet. Eine spaetere lokale Veraenderung blockiert beim Staging oder beim
 # Remote-Vergleich, statt unbemerkt in Provenienz oder Veroeffentlichung zu laufen.
 $frozenReleaseAssets = @(New-FrozenAssetInventory -Paths $uploads.ToArray())
+
+if ($PrepareLocalPackage) {
+    Assert-AuthenticodeArtifact -Role 'Paketierte Haupt-EXE' -Path $localPackageBuild.MainPath `
+        -ExpectedThumbprint $expectedAuthenticodeThumbprint -Required -LocalTrustOnly
+    Complete-AtlasLocalPackageBuild -Build $localPackageBuild -Root $repositoryRoot `
+        -ExpectedCommit $ExpectedCommit -Version $Version -Thumbprint $expectedAuthenticodeThumbprint `
+        -InstallerPath $updaterInstaller.FullName -SidecarPath $builtSidecarPath -SigningConfiguration $authenticodeConfiguration
+    Write-Step 'Lokales Updatepaket geprueft bereitgestellt; nichts installiert oder veroeffentlicht'
+    return
+}
 
 # Tauri signiert die fuer NSIS gepatchte Haupt-EXE innerhalb des Bundle-Laufs und
 # stellt target\release\projectatlas-desktop.exe danach absichtlich aus einer

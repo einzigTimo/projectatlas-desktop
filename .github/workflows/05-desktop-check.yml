@@ -50,6 +50,14 @@ jobs:
           $scripts = @(
             ".github/scripts/Assert-ControllerPreflight.ps1",
             ".github/scripts/invoke-desktop-release.ps1",
+            ".github/scripts/ProjectAtlasLocalPackage.ps1",
+            ".github/scripts/Capture-ProjectAtlasLocalPayload.ps1",
+            "scripts/Prepare-ProjectAtlasDesktopLocal.ps1",
+            "scripts/ProjectAtlasLocalInstall.ps1",
+            "scripts/Install-ProjectAtlasDesktopLocal.ps1",
+            "scripts/Assert-ProjectAtlasDesktopInstalled.ps1",
+            "scripts/Test-ProjectAtlasDesktopLocalPackage.ps1",
+            "scripts/Test-ProjectAtlasDesktopLocalInstall.ps1",
             "scripts/Test-ProjectAtlasDesktopFirstRun.ps1",
             "scripts/Test-ProjectAtlasDesktopReleaseGates.ps1"
           )
@@ -69,6 +77,12 @@ jobs:
       - name: Release-Gates verifizieren
         shell: pwsh
         run: ./scripts/Test-ProjectAtlasDesktopReleaseGates.ps1
+
+      - name: Lokale Paket- und Wiederherstellungsgrenzen pruefen
+        shell: pwsh
+        run: |
+          ./scripts/Test-ProjectAtlasDesktopLocalPackage.ps1
+          ./scripts/Test-ProjectAtlasDesktopLocalInstall.ps1
 
       - name: JavaScript-Syntax pruefen
         shell: pwsh

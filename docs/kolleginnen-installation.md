@@ -81,6 +81,14 @@ Programms.
 
 ## Abnahme vor der Weitergabe
 
+Ein ausdrücklich beauftragtes persönliches Update auf dem Entwicklungsrechner ist davon getrennt:
+Die Develop Zentrale kann die vorhandene Installation mit einem ausschließlich dort
+vertrauenswürdigen, gepinnten Zertifikat aktualisieren. Dafür werden das signierte Paket und die
+alte Installation gesichert, die tatsächlich installierten Dateien und der App-Start geprüft und
+bei Fehlern der alte Stand wiederhergestellt. Dieser Weg benötigt keinen zweiten Rechner, erzeugt
+aber keinen öffentlichen Release und keine Freigabe für Kolleg:innen. Die Windows-Vertrauensliste
+wird dabei nicht erweitert. Die Registrierung verwendet `local-windows/projectatlas-desktop-local`.
+
 Die ausgebende Stelle gibt eine Version erst weiter, wenn mindestens Folgendes aktuell belegt ist:
 
 - Windows Authenticode ist am Installer und am gebündelten ProjectAtlas-CLI-Sidecar gültig und auf

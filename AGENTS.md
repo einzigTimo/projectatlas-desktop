@@ -58,7 +58,33 @@ Agenten in diesem Repository. `CLAUDE.md` importiert ausschließlich diese Datei
 - Technische Plattform- und Systemfreigaben sowie die Fail-closed-Gates der Zentrale bleiben von der
   Regel „keine zweite Chat-Genehmigung“ unberührt.
 
-## Aktuelle Migrationsgrenze
+## Persönliches lokales Windows-Update
+
+Der ausdrücklich beauftragte lokale Updateweg benötigt keinen zweiten Windows-Rechner. Er läuft
+weiterhin ausschließlich über die Develop Zentrale mit der Zielidentität
+`projectatlas-desktop/desktop-app/prod`, aber mit der eindeutigen lokalen Ressourcenbindung
+`local-windows/projectatlas-desktop-local`. Ein Preflight für `github-release` autorisiert ihn nicht.
+
+- Nur sauberer, vollständig gepushter `main == origin/main` mit grüner CI für exakt diesen Commit.
+- Der letzte registrierte Precheck baut vor Ausstellung des kurzlebigen Preflights das Paket über
+  `scripts/Prepare-ProjectAtlasDesktopLocal.ps1`. Ein Probebau installiert nichts.
+- Der registrierte `scripts/Install-ProjectAtlasDesktopLocal.ps1` aktualisiert ausschließlich die
+  vorhandene Benutzerinstallation unter `%LOCALAPPDATA%\ProjectAtlas Desktop`.
+- Für diesen Rechner darf das bereits lokal vertrauenswürdige, im Preflight gepinnte
+  Code-Signing-Zertifikat verwendet werden. Keine neue Vertrauenswurzel importieren. Gültige
+  Authenticode-Signaturen, Zeitstempel und Tauri-Updatersignatur bleiben erforderlich.
+- Vorherige Installation und betroffene Windows-Einträge werden gesichert. Die installierten
+  Programmdateien müssen exakt dem gehashten Paket entsprechen. Versions-, Signatur-,
+  Ersteinrichtungs- und GUI-Abnahme sind obligatorisch; Fehler lösen eine geprüfte Wiederherstellung
+  aus. Projektquellen, Projektindizes und die persönliche Projektliste sind keine Installationsziele.
+- `scripts/Assert-ProjectAtlasDesktopInstalled.ps1` prüft das tatsächliche installierte Ergebnis
+  unabhängig vom Build-Verzeichnis. Ein mit dem im Preflight gepinnten Zertifikat CMS-signiertes
+  Manifest bindet Quelle, Rechner, Benutzer und sämtliche Paketdateien. Ein persistenter Beleg
+  bindet zusätzlich Preflight und Backup.
+- Kein Upload, kein GitHub-Release und kein Produktiv-Tag in diesem lokalen Modus. Er ist keine
+  Freigabe zur Weitergabe an andere Rechner. Die öffentliche `-Publish`-Sperre bleibt bestehen.
+
+## Migrationsgrenze für öffentliche Veröffentlichungen
 
 Der Controller-Root darf erst von `ProjectAtlas-studio-hamburg` auf dieses Repository umgestellt
 werden, wenn die zentrale Härtung auf `main` gemergt, CI grün, der saubere Controller-Checkout
