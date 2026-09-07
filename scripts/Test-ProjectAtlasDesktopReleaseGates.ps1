@@ -185,6 +185,375 @@ if ($capturedStdout -cne 'machine-readable-stdout') {
     throw 'Invoke-NativeCapture vermischt erfolgreichen stderr weiterhin mit dem maschinenlesbaren stdout.'
 }
 
+function Get-TestFunctionDefinition {
+    param(
+        [Parameter(Mandatory = $true)][Management.Automation.Language.Ast]$Ast,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$SourceLabel
+    )
+
+    $matches = @($Ast.FindAll(
+            {
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $Name
+            },
+            $true
+        ))
+    if ($matches.Count -ne 1) {
+        throw "$SourceLabel enthaelt nicht genau eine Funktion $Name."
+    }
+    return $matches[0]
+}
+
+function Assert-SourceFingerprintBlocksPathRedirection {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Implementation,
+        [Parameter(Mandatory = $true)][string]$Scenario
+    )
+
+    $blocked = $false
+    try {
+        [void](Get-SourceFingerprint -ResolvedSource $Path)
+    }
+    catch {
+        $blocked = $_.Exception.Message -like '*symbolischen Link oder eine Junction*'
+    }
+    if (-not $blocked) {
+        throw "$Implementation blockiert $Scenario nicht fail-closed."
+    }
+}
+
+function Remove-TestPathRedirection {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('File', 'Directory')][string]$Kind
+    )
+
+    try {
+        if ($Kind -eq 'Directory') {
+            [IO.Directory]::Delete($Path, $false)
+        }
+        else {
+            [IO.File]::Delete($Path)
+        }
+    }
+    catch [IO.DirectoryNotFoundException] {
+        return
+    }
+    catch [IO.FileNotFoundException] {
+        return
+    }
+    $remainingGuard = $null
+    try {
+        $remainingGuard = [ProjectAtlas.SourceFingerprintPathGuard]::Open(
+            $Path,
+            $Kind -eq 'Directory'
+        )
+    }
+    catch {
+        $exceptionCursor = $_.Exception
+        $nativeErrorCode = $null
+        while ($null -ne $exceptionCursor) {
+            if ($exceptionCursor -is [ComponentModel.Win32Exception]) {
+                $nativeErrorCode = $exceptionCursor.NativeErrorCode
+            }
+            $exceptionCursor = $exceptionCursor.InnerException
+        }
+        if ($nativeErrorCode -in @(2, 3)) {
+            return
+        }
+        throw
+    }
+    finally {
+        if ($null -ne $remainingGuard) {
+            $remainingGuard.Dispose()
+        }
+    }
+    throw "Test-Link konnte nicht sicher entfernt werden: $Kind."
+}
+
+function Get-TestNativePathInformation {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $guard = [ProjectAtlas.SourceFingerprintPathGuard]::Open($item.FullName, $item.PSIsContainer)
+    try {
+        return [pscustomobject]@{
+            FileAttributes = $guard.FileAttributes
+            ReparseTag     = $guard.ReparseTag
+        }
+    }
+    finally {
+        $guard.Dispose()
+    }
+}
+
+function Assert-TestNativeGuardBlocksReplacement {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][ValidateSet('File', 'Directory')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Implementation
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $guard = [ProjectAtlas.SourceFingerprintPathGuard]::Open(
+        $item.FullName,
+        $Kind -eq 'Directory'
+    )
+    $replacementPath = "$Path.guard-replacement"
+    try {
+        $replacementBlocked = $false
+        try {
+            if ($Kind -eq 'Directory') {
+                [IO.Directory]::Move($Path, $replacementPath)
+            }
+            else {
+                [IO.File]::Move($Path, $replacementPath)
+            }
+        }
+        catch {
+            $exceptionCursor = $_.Exception
+            while ($null -ne $exceptionCursor) {
+                if (($exceptionCursor.HResult -band 0xFFFF) -eq 32) {
+                    $replacementBlocked = $true
+                    break
+                }
+                $exceptionCursor = $exceptionCursor.InnerException
+            }
+            if (-not $replacementBlocked) {
+                throw
+            }
+        }
+        if (-not $replacementBlocked) {
+            if (Test-Path -LiteralPath $replacementPath) {
+                if ($Kind -eq 'Directory') {
+                    [IO.Directory]::Move($replacementPath, $Path)
+                }
+                else {
+                    [IO.File]::Move($replacementPath, $Path)
+                }
+            }
+            throw "$Implementation haelt keinen fail-closed Austauschschutz fuer $Kind-Pfade."
+        }
+
+        if ($Kind -eq 'File') {
+            $writeHandle = $null
+            $writeBlocked = $false
+            try {
+                $writeHandle = [IO.File]::Open(
+                    $Path,
+                    [IO.FileMode]::Open,
+                    [IO.FileAccess]::Write,
+                    [IO.FileShare]::ReadWrite
+                )
+            }
+            catch {
+                $exceptionCursor = $_.Exception
+                while ($null -ne $exceptionCursor) {
+                    if (($exceptionCursor.HResult -band 0xFFFF) -eq 32) {
+                        $writeBlocked = $true
+                        break
+                    }
+                    $exceptionCursor = $exceptionCursor.InnerException
+                }
+                if (-not $writeBlocked) {
+                    throw
+                }
+            }
+            finally {
+                if ($null -ne $writeHandle) {
+                    $writeHandle.Dispose()
+                }
+            }
+            if (-not $writeBlocked) {
+                throw "$Implementation haelt keinen fail-closed Schreibschutz waehrend des Datei-Hashings."
+            }
+        }
+    }
+    finally {
+        $guard.Dispose()
+    }
+}
+
+$preflightScriptPath = Join-Path $repositoryRoot '.github\scripts\Assert-ControllerPreflight.ps1'
+$preflightTokens = $null
+$preflightParseErrors = $null
+$preflightAst = [Management.Automation.Language.Parser]::ParseFile(
+    $preflightScriptPath,
+    [ref]$preflightTokens,
+    [ref]$preflightParseErrors
+)
+if ($preflightParseErrors.Count -gt 0) {
+    throw "Preflight-Pruefer kann fuer den Gate-Test nicht geparst werden: $($preflightParseErrors[0].Message)"
+}
+$fingerprintImplementations = @(
+    [pscustomobject]@{
+        Name       = 'release-wrapper'
+        Definition = Get-TestFunctionDefinition `
+            -Ast $ast -Name 'Get-SourceFingerprint' -SourceLabel 'Release-Wrapper'
+    },
+    [pscustomobject]@{
+        Name       = 'preflight-checker'
+        Definition = Get-TestFunctionDefinition `
+            -Ast $preflightAst -Name 'Get-SourceFingerprint' -SourceLabel 'Preflight-Pruefer'
+    }
+)
+foreach ($implementation in $fingerprintImplementations) {
+    $fingerprintSource = $implementation.Definition.Extent.Text
+    foreach ($requiredFragment in @(
+            'FileAttributeTagInfoClass = 9',
+            'GenericRead = 0x80000000',
+            'FileFlagOpenReparsePoint = 0x00200000',
+            'SourceFingerprintPathGuard]::Open',
+            '0x20000000',
+            '$heldPathGuards.Add',
+            '$heldPathGuards[$index].Dispose()'
+        )) {
+        if (-not $fingerprintSource.Contains($requiredFragment, [StringComparison]::Ordinal)) {
+            throw "$($implementation.Name) enthaelt die erforderliche native Link-/TOCTOU-Sicherung nicht: $requiredFragment"
+        }
+    }
+    if ($fingerprintSource.Contains('FileShareDelete', [StringComparison]::Ordinal)) {
+        throw "$($implementation.Name) erlaubt waehrend der Fingerprint-Pruefung weiterhin Pfadaustausch per Delete-Sharing."
+    }
+}
+
+$reparseVerificationRoot = New-ReleaseVerificationRoot
+try {
+    foreach ($implementation in $fingerprintImplementations) {
+        Invoke-Expression $implementation.Definition.Extent.Text
+        $checkoutFingerprint = Get-SourceFingerprint -ResolvedSource $releaseScriptPath
+        if ($checkoutFingerprint -notmatch '^[0-9A-F]{64}$') {
+            throw "$($implementation.Name) blockiert den realen Checkout ohne symbolischen Link oder Junction."
+        }
+        $checkoutNativeInformation = Get-TestNativePathInformation -Path $releaseScriptPath
+        if (($checkoutNativeInformation.FileAttributes -band [uint32]0x00000400) -ne 0 -and
+            ($checkoutNativeInformation.ReparseTag -eq 0 -or
+                ($checkoutNativeInformation.ReparseTag -band [uint32]0x20000000) -ne 0)) {
+            throw "$($implementation.Name) klassifiziert den realen OneDrive-Cloud-Pfad faelschlich als Pfadumleitung."
+        }
+        $implementationRoot = New-ReleaseVerificationStage `
+            -VerificationRoot $reparseVerificationRoot `
+            -Name "fingerprint-$($implementation.Name)"
+        $sourceDirectory = Join-Path $implementationRoot 'source'
+        $nestedDirectory = Join-Path $sourceDirectory 'nested'
+        $outsideDirectory = Join-Path $implementationRoot 'outside'
+        [void](New-Item -ItemType Directory -Path $nestedDirectory, $outsideDirectory)
+        $normalFile = Join-Path $nestedDirectory 'normal.txt'
+        $outsideFile = Join-Path $outsideDirectory 'outside.txt'
+        [IO.File]::WriteAllText($normalFile, 'normaler Inhalt')
+        [IO.File]::WriteAllText($outsideFile, 'ausserhalb des attestierten Roots')
+
+        $normalFileFingerprint = Get-SourceFingerprint -ResolvedSource $normalFile
+        $normalDirectoryFingerprint = Get-SourceFingerprint -ResolvedSource $sourceDirectory
+        if ($normalFileFingerprint -notmatch '^[0-9A-F]{64}$' -or
+            $normalDirectoryFingerprint -notmatch '^[0-9A-F]{64}$') {
+            throw "$($implementation.Name) erzeugt fuer normale Pfade keinen gueltigen SHA-256-Fingerprint."
+        }
+        Assert-TestNativeGuardBlocksReplacement `
+            -Path $normalFile -Kind File -Implementation $implementation.Name
+        Assert-TestNativeGuardBlocksReplacement `
+            -Path $nestedDirectory -Kind Directory -Implementation $implementation.Name
+
+        $junctionPath = Join-Path $sourceDirectory 'directory-junction'
+        $junctionCanary = $null
+        try {
+            $junctionCanary = [IO.File]::Open(
+                $outsideFile,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::None
+            )
+            [void](New-Item -ItemType Junction -Path $junctionPath -Target $outsideDirectory -ErrorAction Stop)
+            $junctionNativeInformation = Get-TestNativePathInformation -Path $junctionPath
+            if (($junctionNativeInformation.ReparseTag -band [uint32]0x20000000) -eq 0) {
+                throw "$($implementation.Name) erkennt das Name-Surrogate-Bit der Test-Junction nativ nicht."
+            }
+            Assert-SourceFingerprintBlocksPathRedirection `
+                -Path $junctionPath -Implementation $implementation.Name `
+                -Scenario 'eine Junction als attestierten Root'
+            Assert-SourceFingerprintBlocksPathRedirection `
+                -Path (Join-Path $junctionPath 'outside.txt') `
+                -Implementation $implementation.Name `
+                -Scenario 'einen attestierten Dateipfad unterhalb einer Junction'
+            Assert-SourceFingerprintBlocksPathRedirection `
+                -Path $sourceDirectory -Implementation $implementation.Name `
+                -Scenario 'eine Junction innerhalb des attestierten Roots'
+        }
+        finally {
+            Remove-TestPathRedirection -Path $junctionPath -Kind Directory
+            if ($null -ne $junctionCanary) {
+                $junctionCanary.Dispose()
+            }
+        }
+
+        $fileLinkPath = Join-Path $sourceDirectory 'file-link.txt'
+        $fileLinkCreated = $false
+        $fileLinkCanary = $null
+        try {
+            $fileLinkCanary = [IO.File]::Open(
+                $outsideFile,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::None
+            )
+            try {
+                [void](New-Item -ItemType SymbolicLink -Path $fileLinkPath -Target $outsideFile -ErrorAction Stop)
+                $fileLinkCreated = $true
+            }
+            catch {
+                $exceptionCursor = $_.Exception
+                $nativeErrorCode = $null
+                $platformUnsupported = $false
+                while ($null -ne $exceptionCursor) {
+                    if ($exceptionCursor -is [ComponentModel.Win32Exception]) {
+                        $nativeErrorCode = $exceptionCursor.NativeErrorCode
+                    }
+                    if ($exceptionCursor -is [PlatformNotSupportedException]) {
+                        $platformUnsupported = $true
+                    }
+                    $exceptionCursor = $exceptionCursor.InnerException
+                }
+                $unsupportedFileSymlink =
+                    $_.FullyQualifiedErrorId -eq 'NewItemSymbolicLinkElevationRequired,Microsoft.PowerShell.Commands.NewItemCommand' -or
+                    $nativeErrorCode -eq 1314 -or
+                    $platformUnsupported
+                if (-not $unsupportedFileSymlink) {
+                    throw
+                }
+                Write-Warning "SKIP Datei-Symlink ($($implementation.Name)): Erstellung ist auf diesem Windows-Host nicht berechtigt oder unterstuetzt ($($_.FullyQualifiedErrorId))."
+            }
+            if ($fileLinkCreated) {
+                $fileLinkNativeInformation = Get-TestNativePathInformation -Path $fileLinkPath
+                if (($fileLinkNativeInformation.ReparseTag -band [uint32]0x20000000) -eq 0) {
+                    throw "$($implementation.Name) erkennt das Name-Surrogate-Bit des Datei-Symlinks nativ nicht."
+                }
+                Assert-SourceFingerprintBlocksPathRedirection `
+                    -Path $fileLinkPath -Implementation $implementation.Name `
+                    -Scenario 'einen Datei-Symlink als attestierten Pfad'
+                Assert-SourceFingerprintBlocksPathRedirection `
+                    -Path $sourceDirectory -Implementation $implementation.Name `
+                    -Scenario 'einen Datei-Symlink innerhalb des attestierten Roots'
+            }
+        }
+        finally {
+            Remove-TestPathRedirection -Path $fileLinkPath -Kind File
+            if ($null -ne $fileLinkCanary) {
+                $fileLinkCanary.Dispose()
+            }
+        }
+
+        if ([IO.File]::ReadAllText($outsideFile) -cne 'ausserhalb des attestierten Roots') {
+            throw "$($implementation.Name) hat trotz Link-Blockade das externe Testziel veraendert."
+        }
+    }
+}
+finally {
+    Remove-ReleaseVerificationRoot -VerificationRoot $reparseVerificationRoot
+}
+
 function Invoke-NativeCapture {
     param(
         [string]$FilePath,
