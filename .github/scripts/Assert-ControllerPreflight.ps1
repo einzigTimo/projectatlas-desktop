@@ -276,7 +276,7 @@ $artifactHashAfter = (Get-FileHash -LiteralPath $artifactFull -Algorithm SHA256)
 if ($artifactHashBefore -ne $artifactHashAfter) {
     throw 'Preflight-Artefakt wurde waehrend der Pruefung veraendert.'
 }
-if ($artifact.schema_version -ne 'studiohamburg.deploy-preflight.v1' -or
+if ($artifact.schema_version -ne 'deploy-controller.preflight.v1' -or
     $artifact.producer -ne 'Deployment-Controller' -or $artifact.result -ne 'pass') {
     throw 'Preflight-Artefakt hat ein unbekanntes Schema, einen falschen Producer oder kein grünes Ergebnis.'
 }

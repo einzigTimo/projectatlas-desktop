@@ -388,6 +388,45 @@ $preflightAst = [Management.Automation.Language.Parser]::ParseFile(
 if ($preflightParseErrors.Count -gt 0) {
     throw "Preflight-Pruefer kann fuer den Gate-Test nicht geparst werden: $($preflightParseErrors[0].Message)"
 }
+$schemaGuards = @($preflightAst.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and
+            $node.Extent.Text.Contains('$artifact.schema_version', [StringComparison]::Ordinal)
+        }, $true))
+if ($schemaGuards.Count -ne 1) {
+    throw 'Der Preflight-Pruefer enthaelt nicht genau ein pruefbares Schema-/Producer-Gate.'
+}
+$schemaCases = @(
+    @{ Name = 'aktueller Controller'; Schema = 'deploy-controller.preflight.v1'; Producer = 'Deployment-Controller'; Result = 'pass'; Accept = $true },
+    @{ Name = 'veraltetes Schema'; Schema = 'studiohamburg.deploy-preflight.v1'; Producer = 'Deployment-Controller'; Result = 'pass'; Accept = $false },
+    @{ Name = 'unbekannte Version'; Schema = 'deploy-controller.preflight.v2'; Producer = 'Deployment-Controller'; Result = 'pass'; Accept = $false },
+    @{ Name = 'fehlendes Schema'; Schema = $null; Producer = 'Deployment-Controller'; Result = 'pass'; Accept = $false },
+    @{ Name = 'fremder Producer'; Schema = 'deploy-controller.preflight.v1'; Producer = 'anderer-producer'; Result = 'pass'; Accept = $false },
+    @{ Name = 'rotes Ergebnis'; Schema = 'deploy-controller.preflight.v1'; Producer = 'Deployment-Controller'; Result = 'fail'; Accept = $false }
+)
+foreach ($schemaCase in $schemaCases) {
+    $accepted = $true
+    try {
+        & {
+            param($Case, $Guard)
+            $artifact = [pscustomobject]@{
+                schema_version = $Case.Schema
+                producer       = $Case.Producer
+                result         = $Case.Result
+            }
+            Invoke-Expression $Guard
+        } $schemaCase $schemaGuards[0].Extent.Text
+    }
+    catch {
+        if ($_.Exception.Message -notlike 'Preflight-Artefakt hat ein unbekanntes Schema*') {
+            throw
+        }
+        $accepted = $false
+    }
+    if ($accepted -ne $schemaCase.Accept) {
+        throw "Schema-/Producer-Gate liefert fuer '$($schemaCase.Name)' ein falsches Ergebnis."
+    }
+}
 $fingerprintImplementations = @(
     [pscustomobject]@{
         Name       = 'release-wrapper'
