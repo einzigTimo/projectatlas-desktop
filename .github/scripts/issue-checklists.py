@@ -1127,12 +1127,16 @@ def mapped_issue_numbers(issue_map: dict[str, tuple[Owner, ...]]) -> set[int]:
 
 
 def milestone_issue_failures(
-    milestone: str, issues: list[dict[str, object]], mapped_issues: set[int]
+    milestone: str,
+    issues: list[dict[str, object]],
+    mapped_issues: set[int],
+    *,
+    require_mapping: bool = True,
 ) -> list[str]:
     failures: list[str] = []
     for item in issues:
         number = positive_issue(item.get("number"), "issue number")
-        if number not in mapped_issues:
+        if require_mapping and number not in mapped_issues:
             failures.append(
                 f"#{number} in milestone {milestone} has no local OpenSpec mapping"
             )
@@ -1145,13 +1149,26 @@ def milestone_issue_failures(
 
 
 def check_milestone_complete(
-    repo: str, milestone: str, mapped_issues: set[int]
+    repo: str,
+    milestone: str,
+    mapped_issues: set[int],
+    *,
+    state_only: bool = False,
 ) -> list[str]:
     failures: list[str] = []
     issues = milestone_issues(repo, milestone)
     if not issues:
         return [f"milestone {milestone!r} has no issues"]
-    failures.extend(milestone_issue_failures(milestone, issues, mapped_issues))
+    failures.extend(
+        milestone_issue_failures(
+            milestone,
+            issues,
+            mapped_issues,
+            require_mapping=not state_only,
+        )
+    )
+    if state_only:
+        return failures
     for item in issues:
         number = positive_issue(item.get("number"), "issue number")
         if number not in mapped_issues:
@@ -1674,6 +1691,12 @@ Mitigations:
         "#3 in milestone v1.0.0-00 has no local OpenSpec mapping",
         "#3 in milestone v1.0.0-00 is OPEN, not CLOSED",
     ]
+    assert milestone_issue_failures(
+        "v1.0.0-00",
+        [{"number": 3, "state": "closed"}],
+        {1, 2},
+        require_mapping=False,
+    ) == []
     try:
         validate_unique_issue_ownership(
             Path("issue-map.json"),
@@ -1818,6 +1841,7 @@ def main() -> None:
     parser.add_argument("--milestone", action="append", default=[])
     parser.add_argument("--planned-issue", type=int)
     parser.add_argument("--skip-openspec", action="store_true")
+    parser.add_argument("--milestone-state-only", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -1826,6 +1850,8 @@ def main() -> None:
         return
     if not args.repo:
         raise SystemExit("--repo is required unless --self-test is used")
+    if args.milestone_state_only and not args.skip_openspec:
+        raise SystemExit("--milestone-state-only requires --skip-openspec")
 
     root = Path(args.root)
     failures: list[str] = []
@@ -1844,7 +1870,14 @@ def main() -> None:
         )
     mapped_issues = mapped_issue_numbers(issue_map)
     for milestone in args.milestone:
-        failures.extend(check_milestone_complete(args.repo, milestone, mapped_issues))
+        failures.extend(
+            check_milestone_complete(
+                args.repo,
+                milestone,
+                mapped_issues,
+                state_only=args.milestone_state_only,
+            )
+        )
 
     if failures:
         print("\nIssue checklist validation failed:", file=sys.stderr)

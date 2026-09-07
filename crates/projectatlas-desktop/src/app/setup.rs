@@ -71,7 +71,7 @@ impl ToolKind {
     ///
     /// Each entry is a list of path segments relative to the user's profile folder,
     /// so the joined result uses native separators — a literal `".config/opencode"`
-    /// would surface to the user as `C:\Users\...\.config/opencode`.
+    /// would surface to the user as `C:\Users\<user>\.config/opencode`.
     ///
     /// `OpenCode` is checked in both of its known locations because it moved between
     /// releases.
