@@ -135,7 +135,8 @@ function Assert-Tool {
         [string]$Hint
     )
 
-    $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue
+    $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if ($null -eq $command) {
         throw "Benoetigtes Werkzeug fehlt im PATH: $Name. $Hint"
     }
