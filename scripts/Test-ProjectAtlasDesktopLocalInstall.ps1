@@ -157,6 +157,76 @@ try {
             else { Assert-Test ($events.Contains('restore') -and $events.Contains('restored') -and $events.Contains('receipt:failed-restored')) 'Jeder Installations-, Abnahme- oder Receiptfehler muss verifiziert zurueckkehren.' }
         }
     }
+
+    # Den echten Nachpruefungsablauf mit synthetischen Dateien ausfuehren.
+    # Paket-/Prozessgrenzen sind gemockt; Receipt-Lesen, SHA-256-Vergleich,
+    # Auftragsbindung und finally stammen unveraendert aus dem Produktivskript.
+    & {
+        $postcheckPath = Join-Path $PSScriptRoot 'Assert-ProjectAtlasDesktopInstalled.ps1'
+        $tokens=$null; $errors=$null
+        $postcheckAst = [Management.Automation.Language.Parser]::ParseFile($postcheckPath, [ref]$tokens, [ref]$errors)
+        $tryBlocks = @($postcheckAst.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
+        Assert-Test ($errors.Count -eq 0 -and $tryBlocks.Count -eq 1) 'Nachpruefungsablauf ist fuer den Regressionstest nicht eindeutig.'
+        $postcheck = [scriptblock]::Create($tryBlocks[0].Extent.Text)
+        $Root = $source; $ExpectedCommit = $commit
+        $PreflightArtifact = Join-Path $testRoot 'synthetic-preflight.json'
+        $preflightFixture = [ordered]@{
+            authenticode_certificate_thumbprint=$certificate.Thumbprint; run_id='synthetic-postcheck'
+            expected_commit=$commit; project_id='projectatlas-desktop'; component_id='desktop-app'; environment='prod'
+            target_resource_group='local-windows'; target_app_name='projectatlas-desktop-local'
+        }
+        [IO.File]::WriteAllText($PreflightArtifact, ($preflightFixture | ConvertTo-Json))
+        $preflightHash = Get-AtlasFileHash $PreflightArtifact
+        $script:postcheckPackage = [pscustomobject]@{
+            Directory=$packageDirectory; Manifest=$manifest
+            ManifestHash=(Get-AtlasFileHash (Join-Path $packageDirectory 'candidate.json'))
+        }
+        $expectedHashes = @{ 'projectatlas-desktop.exe'=('b' * 64); 'projectatlas-cli.exe'=('c' * 64) }
+        $receiptFixture = [ordered]@{
+            schema='projectatlas.desktop.local-install.v1'; target='projectatlas-desktop/desktop-app/prod'
+            scope='local-windows'; result='succeeded'; sourceRoot=$Root; sourceCommit=$ExpectedCommit
+            version=$manifest.version; packageManifestSha256=$script:postcheckPackage.ManifestHash
+            certificateThumbprint=$certificate.Thumbprint; installPath=$install
+            preflightPath=$PreflightArtifact; preflightSha256=$preflightHash; runId=$preflightFixture.run_id
+            actualHashes=$expectedHashes; process=@{ path=(Join-Path $install 'projectatlas-desktop.exe'); pid=4242 }
+            backupPath=$backup.directory; backupManifestSha256=$backup.manifestSha256
+        }
+        function Open-AtlasLocalPackage { param($Root,$ExpectedCommit,$ExpectedThumbprint); $script:postcheckPackage }
+        function Close-AtlasLocalPackage { param($Package); $script:postcheckCloses++ }
+        function Assert-AtlasInstalledPayload { param($Package); $script:postcheckPayloadChecks++; return $expectedHashes }
+        function Test-AtlasProcessIdentity { param($Identity); return $true }
+        function Get-Process {
+            [CmdletBinding()]param([int]$Id)
+            if ($Id -ne 4242) { throw 'Unerwarteter Prozesszugriff im Postcheck-Test.' }
+            [pscustomobject]@{ Responding=$true; MainWindowHandle=[IntPtr]1 }
+        }
+        $differentHash = $(if ($preflightHash[0] -eq '0') { '1' } else { '0' }) + $preflightHash.Substring(1)
+        $mixedHash = $preflightHash.Substring(0,32).ToUpperInvariant() + $preflightHash.Substring(32).ToLowerInvariant()
+        foreach ($case in @(
+                @{ Name='kleine Hexzeichen'; Value=$preflightHash; Valid=$true },
+                @{ Name='grosse Hexzeichen'; Value=$preflightHash.ToUpperInvariant(); Valid=$true },
+                @{ Name='gemischte Hexzeichen'; Value=$mixedHash; Valid=$true },
+                @{ Name='abweichende Bytes'; Value=$differentHash; Valid=$false },
+                @{ Name='zu kurzer Hash'; Value=$preflightHash.Substring(1); Valid=$false },
+                @{ Name='Nicht-Hexzeichen'; Value=('g' + $preflightHash.Substring(1)); Valid=$false },
+                @{ Name='angehaengter Zeilenumbruch'; Value=($preflightHash + "`n"); Valid=$false },
+                @{ Name='fehlender Hash'; Value=$null; Valid=$false },
+                @{ Name='Array statt Hashstring'; Value=@($preflightHash); Valid=$false })) {
+            $receiptFixture.preflightSha256 = $case.Value
+            [IO.File]::WriteAllText((Join-Path $packageDirectory 'installed.json'), ($receiptFixture | ConvertTo-Json -Depth 10))
+            $script:postcheckPayloadChecks = 0; $script:postcheckCloses = 0
+            if ($case.Valid) {
+                & $postcheck
+                Assert-Test ($script:postcheckPayloadChecks -eq 1) "Gueltiger Preflight-Hash ($($case.Name)) erreicht die Payload-Nachpruefung nicht."
+            } else {
+                $failure = $null
+                try { & $postcheck } catch { $failure = $_ }
+                Assert-Test ($null -ne $failure -and $failure.Exception.Message -like '*exakten zentralen Auftrag*') "Ungueltiger Preflight-Hash ($($case.Name)) wurde nicht an der Auftragsbindung blockiert."
+                Assert-Test ($script:postcheckPayloadChecks -eq 0) "Ungueltiger Preflight-Hash ($($case.Name)) erreichte weitere Nachpruefungen."
+            }
+            Assert-Test ($script:postcheckCloses -eq 1) "Postcheck ($($case.Name)) hat das Paket nicht im finally geschlossen."
+        }
+    }
     $start = [Diagnostics.ProcessStartInfo]::new()
     foreach ($name in @('TAURI_SIGNING_PRIVATE_KEY','TAURI_SIGNING_PRIVATE_KEY_PATH','TAURI_SIGNING_PRIVATE_KEY_PASSWORD')) { $start.Environment[$name] = 'test-only-secret' }
     Remove-AtlasSigningEnvironment $start
