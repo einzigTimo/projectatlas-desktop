@@ -84,6 +84,7 @@ $script:testCommit = 'a' * 40
 $script:testTagObject = 'b' * 40
 $script:testPeeledCommit = 'c' * 40
 $script:testImmutableReleases = 'true'
+$script:testFetchedRemoteMain = $false
 $sourceRepository = 'einzigTimo/projectatlas-desktop'
 $ReleaseRepo = 'owner/repository'
 
@@ -213,7 +214,18 @@ function Invoke-NativeCapture {
     switch ($Arguments[2]) {
         'branch' { return 'main' }
         'remote' { return 'https://github.com/einzigTimo/projectatlas-desktop.git' }
-        'rev-parse' { return $script:testCommit }
+        'rev-parse' {
+            switch ($Arguments[3]) {
+                'HEAD' { return $script:testCommit }
+                'origin/main' {
+                    if (-not $script:testFetchedRemoteMain) {
+                        throw 'origin/main wurde ohne expliziten Fetch-Ref aufgeloest.'
+                    }
+                    return $script:testCommit
+                }
+                default { throw "Unerwartetes rev-parse-Ziel: $($Arguments[3])" }
+            }
+        }
         'status' { return '' }
         default { throw "Unerwarteter Git-Stub-Aufruf: $($Arguments -join ' ')" }
     }
@@ -221,6 +233,17 @@ function Invoke-NativeCapture {
 
 function Invoke-Native {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory)
+
+    if ($script:testMode -ne 'binding' -or $FilePath -ne 'git') {
+        return
+    }
+    if ($Arguments[2] -ne 'fetch' -or
+        $Arguments[3] -ne '--prune' -or
+        $Arguments[4] -ne 'origin' -or
+        $Arguments[5] -ne 'main:refs/remotes/origin/main') {
+        throw "main wurde nicht explizit in refs/remotes/origin/main gefetcht: $($Arguments -join ' ')"
+    }
+    $script:testFetchedRemoteMain = $true
 }
 
 function Get-SourceFingerprint {

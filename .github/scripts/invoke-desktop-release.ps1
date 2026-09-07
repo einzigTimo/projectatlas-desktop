@@ -1159,7 +1159,11 @@ function Assert-PublishBinding {
         throw "Produktiver Release blockiert: origin zeigt auf '$originUrl' statt auf $sourceRepository."
     }
 
-    Invoke-Native -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'fetch', 'origin', 'main', '--prune')
+    Invoke-Native -FilePath 'git' -Arguments @(
+        '-C', $RepositoryRoot,
+        'fetch', '--prune',
+        'origin', 'main:refs/remotes/origin/main'
+    )
     $localHead = Invoke-NativeCapture -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'rev-parse', 'HEAD')
     $remoteHead = Invoke-NativeCapture -FilePath 'git' -Arguments @('-C', $RepositoryRoot, 'rev-parse', 'origin/main')
     if ($localHead -notmatch '^[0-9a-f]{40}$' -or $localHead -ne $ExpectedCommit) {
