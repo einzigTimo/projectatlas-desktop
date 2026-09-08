@@ -26,15 +26,18 @@ Agenten in diesem Repository. `CLAUDE.md` importiert ausschließlich diese Datei
 Übergreifend gilt `%USERPROFILE%\Projects\Deployment-Controller\DEPLOY-RICHTLINIE.md`.
 
 - Jeder produktive Release von ProjectAtlas Desktop läuft ausschließlich über die Develop Zentrale,
-  Ziel `projectatlas-desktop/desktop-app/prod`.
+  Ziel `projectatlas-desktop/desktop-release/prod` mit der Ressourcenbindung
+  `github-release/projectatlas-desktop-releases`. Die Veröffentlichung und das persönliche lokale
+  Windows-Update sind bewusst getrennte Komponenten desselben Projekts: Ein Preflight der einen
+  autorisiert die andere nicht, und beide können nebeneinander registriert bleiben.
 - Umfasst der aktuelle Auftrag die Auslieferung, darf sie nach grünen Projekt-Gates ohne erneute
   Chat-Rückfrage über den Controller-Helper
   `%USERPROFILE%\Projects\Deployment-Controller\scripts\Request-CentralDeploy.ps1` mit dem Ziel
-  `projectatlas-desktop` persistent vorgemerkt werden. Die Zentrale prüft, startet seriell und
+  `projectatlas-desktop-release` persistent vorgemerkt werden. Die Zentrale prüft, startet seriell und
   überwacht; sie ist keine zweite fachliche Freigabestufe. Umfasst der aktuelle Auftrag keine
   Auslieferung, darf daraus keine Vormerkung abgeleitet werden.
 - Jede persistente Vormerkung ist an den kanonischen Controller-Root, die vollständige Zielidentität
-  `projectatlas-desktop/desktop-app/prod` und den exakten, bei der Vormerkung geprüften
+  `projectatlas-desktop/desktop-release/prod` und den exakten, bei der Vormerkung geprüften
   `origin/main`-Commit gebunden sowie zeitlich begrenzt. Root-, Ziel- oder Commit-Drift und der
   Ablauf der Attestierung stoppen fail-closed; für den neuen Stand ist eine neue Vormerkung nötig.
 - Kein direkter Aufruf von `.github/scripts/invoke-desktop-release.ps1 -Publish`, `gh workflow run`,
