@@ -1521,7 +1521,7 @@ if ($executeLegacySingleInvocationPublish) {
     }
     $preflightResults = @(& $preflightCheck `
         -ArtifactPath $PreflightArtifact -ProjectRoot $repositoryRoot `
-        -ProjectId "projectatlas-desktop" -ComponentId "desktop-app" `
+        -ProjectId "projectatlas-desktop" -ComponentId "desktop-release" `
         -SourcePath $preflightSourcePath `
         -TargetResourceGroup "github-release" -TargetAppName "projectatlas-desktop-releases" `
         -PassThru)
