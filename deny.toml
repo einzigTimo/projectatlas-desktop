@@ -51,6 +51,7 @@ skip = [
   { crate = "hashlink@0.9.1", reason = "rusqlite 0.32 resolves hashlink 0.9; remove when rusqlite adopts the retained hashlink line." },
   { crate = "getrandom@0.2.17", reason = "tree-sitter-language-pack 1.13.2 resolves ahash through getrandom 0.2 only in the optional parser worker graph; remove when upstream adopts the retained getrandom line." },
   { crate = "windows-sys@0.60.2", reason = "notify 8.2 resolves windows-sys 0.60; remove when notify adopts the retained windows-sys line." },
+  { crate = "syn@2.0.118", reason = "serde_derive 1.0.229, clap_derive 4.6.4 and thiserror-impl 2.0.20 moved to syn 3, while the workspace crate projectatlas-lints and the remaining proc-macro upstreams (async-trait, darling, tokio-macros, tracing-attributes and others) still resolve syn 2; remove when the workspace and those upstreams adopt the retained syn line." },
 ]
 
 [bans.workspace-dependencies]
