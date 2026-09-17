@@ -26,6 +26,20 @@
     und zeigt an, welche Artefakte entstanden sind — so laesst sich ein Release gefahrlos
     proben, bevor er wirklich hochgeht.
 
+    Produktiver Release (zweiphasig, jede Phase in einem eigenen pwsh-Prozess):
+    -Publish ist der einzige registrierte Einstieg der Develop Zentrale. Er prueft das frische
+    Preflight und startet nacheinander
+      1. -ReleasePhase Draft: Bau, privater GitHub-Draft OHNE Git-Tag, Remote-Verifikation,
+         latest.json und Provenienz, Draft-State unter
+         %LOCALAPPDATA%\ProjectAtlas\desktop-release-runs\<RunId>. Nie oeffentlich.
+      2. scripts/Invoke-ProjectAtlasDesktopCleanWindowsAttestation.ps1: Installation der
+         Draft-Assets in einer frischen Windows Sandbox und hashgebundene Attestierung.
+      3. -ReleasePhase Promote: nur mit frischer, exakt passender Attestierung; der Draft
+         wird remote erneut vollstaendig verifiziert und erst dann per ID veroeffentlicht.
+         GitHub legt den Versions-Tag dabei auf den gebundenen Release-Repo-Commit an.
+    Der erste Fehler bricht ab. Ein nicht attestierter Draft bleibt privat und wird nie
+    automatisch geloescht. Details: .github/scripts/ProjectAtlasReleasePhases.ps1.
+
 .PARAMETER Version
     Version ohne fuehrendes v, z. B. 0.2.0. Muss bereits in
     crates/projectatlas-desktop/Cargo.toml UND tauri.conf.json stehen — das Skript prueft nur,
@@ -96,12 +110,29 @@ param(
     [switch]$PrepareLocalPackage,
 
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string]$ExpectedCommit
+    [string]$ExpectedCommit,
+
+    # Interne Phase des zweiphasigen Releases. Wird ausschliesslich vom -Publish-Einstieg
+    # in einem eigenen Prozess gesetzt.
+    [ValidateSet('Draft', 'Promote')]
+    [string]$ReleasePhase,
+
+    [ValidatePattern('^[0-9a-f]{32}$')]
+    [string]$RunId,
+
+    [ValidatePattern('^[0-9a-f]{64}$')]
+    [string]$DraftStateSha256,
+
+    [ValidatePattern('^[0-9a-f]{64}$')]
+    [string]$AttestationSha256
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+# Gemeinsame Prozess-, GitHub- und Phasenbausteine (ohne Seiteneffekte).
+. (Join-Path $PSScriptRoot 'ProjectAtlasReleasePhases.ps1')
 
 $sidecarBinaryName = "projectatlas-cli-x86_64-pc-windows-msvc.exe"
 $sourceRepository = "einzigTimo/projectatlas-desktop"
@@ -143,85 +174,9 @@ function Assert-Tool {
     return $command.Source
 }
 
-function New-NativeProcessStartInfo {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$FilePath,
+# New-NativeProcessStartInfo, Invoke-Native und Invoke-NativeCapture liegen in
+# ProjectAtlasReleasePhases.ps1, damit alle Release-Phasen dieselbe Secret-Isolation nutzen.
 
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyCollection()]
-        [string[]]$Arguments,
-
-        [Parameter(Mandatory = $false)]
-        [string]$WorkingDirectory,
-
-        [Parameter(Mandatory = $false)]
-        [switch]$RedirectOutput
-    )
-
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $FilePath
-    $start.UseShellExecute = $false
-    if ($PSBoundParameters.ContainsKey('WorkingDirectory')) {
-        $start.WorkingDirectory = $WorkingDirectory
-    }
-    foreach ($argument in $Arguments) {
-        [void]$start.ArgumentList.Add($argument)
-    }
-    if ($RedirectOutput) {
-        $start.RedirectStandardOutput = $true
-        $start.RedirectStandardError = $true
-    }
-
-    # Normale Build-, Test-, Git- und GitHub-Prozesse duerfen den privaten
-    # Tauri-Updater-Schluessel auch dann nicht erben, wenn er im aufrufenden
-    # Controller-Prozess vorhanden ist. Nur Invoke-TauriBundle setzt ihn in der
-    # isolierten Umgebung genau eines Paketierungsprozesses wieder ein.
-    foreach ($secretName in @(
-            'TAURI_SIGNING_PRIVATE_KEY',
-            'TAURI_SIGNING_PRIVATE_KEY_PATH',
-            'TAURI_SIGNING_PRIVATE_KEY_PASSWORD')) {
-        [void]$start.Environment.Remove($secretName)
-    }
-    return $start
-}
-
-function Invoke-Native {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$FilePath,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments,
-
-        [Parameter(Mandatory = $false)]
-        [string]$WorkingDirectory
-    )
-
-    $startArguments = @{
-        FilePath  = $FilePath
-        Arguments = $Arguments
-    }
-    if ($PSBoundParameters.ContainsKey('WorkingDirectory')) {
-        $startArguments.WorkingDirectory = $WorkingDirectory
-    }
-    $start = New-NativeProcessStartInfo @startArguments
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    try {
-        if (-not $process.Start()) {
-            throw "Prozess konnte nicht gestartet werden: $FilePath"
-        }
-        $process.WaitForExit()
-        $exitCode = $process.ExitCode
-    }
-    finally {
-        $process.Dispose()
-    }
-    if ($exitCode -ne 0) {
-        throw "Aufruf fehlgeschlagen (Exitcode $exitCode): $FilePath $($Arguments -join ' ')"
-    }
-}
 
 function Invoke-TauriBundle {
     param(
@@ -639,53 +594,35 @@ if ($Publish -and $SkipSidecar) {
 if ($Publish -and -not $PSBoundParameters.ContainsKey("NotesFile")) {
     throw "-Publish verlangt -NotesFile: ohne Changelog erfaehrt niemand, was sich geaendert hat."
 }
-
-function Invoke-NativeCapture {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$FilePath,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments,
-
-        [Parameter(Mandatory = $false)]
-        [string]$WorkingDirectory
-    )
-
-    $startArguments = @{
-        FilePath       = $FilePath
-        Arguments      = $Arguments
-        RedirectOutput = $true
-    }
-    if ($PSBoundParameters.ContainsKey('WorkingDirectory')) {
-        $startArguments.WorkingDirectory = $WorkingDirectory
-    }
-    $start = New-NativeProcessStartInfo @startArguments
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    try {
-        if (-not $process.Start()) {
-            throw "Prozess konnte nicht gestartet werden: $FilePath"
-        }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        # stderr wird absichtlich nur geleert, aber nie mit dem Rueckgabestrom
-        # vermischt. JSON-, Hash- und --jq-Aufrufer erhalten dadurch auch bei
-        # erfolgreichen Warnungen oder Progressmeldungen ausschliesslich stdout.
-        [void]$stderrTask.GetAwaiter().GetResult()
-        $exitCode = $process.ExitCode
-    }
-    finally {
-        $process.Dispose()
-    }
-
-    if ($exitCode -ne 0) {
-        throw "Aufruf fehlgeschlagen (Exitcode $exitCode): $FilePath $($Arguments -join ' ')"
-    }
-    return $stdout.Trim()
+$draftPhase = $ReleasePhase -ceq 'Draft'
+$promotePhase = $ReleasePhase -ceq 'Promote'
+$productiveMode = $Publish -or $draftPhase -or $promotePhase
+if (-not [string]::IsNullOrEmpty($ReleasePhase) -and
+    ($Publish -or $PrepareLocalPackage -or $SkipSidecar -or $AllowUnsignedUpdater)) {
+    throw '-ReleasePhase ist eine interne Phase des -Publish-Einstiegs und nicht mit -Publish, -PrepareLocalPackage, -SkipSidecar oder -AllowUnsignedUpdater kombinierbar.'
 }
+if ($productiveMode -and [string]::IsNullOrWhiteSpace($PreflightArtifact)) {
+    throw "Produktiver Release blockiert: -Publish verlangt das Preflight-Artefakt der Develop Zentrale. Einstieg ist die Develop Zentrale, nicht dieses Skript."
+}
+if ($productiveMode -and $ReleaseRepo -cne 'einzigTimo/projectatlas-desktop-releases') {
+    throw "Produktiver Release blockiert: das attestierte Ziel ist einzigTimo/projectatlas-desktop-releases."
+}
+if ($draftPhase -and -not $PSBoundParameters.ContainsKey('NotesFile')) {
+    throw 'Die Draft-Phase verlangt -NotesFile.'
+}
+if (($draftPhase -or $promotePhase) -and [string]::IsNullOrWhiteSpace($RunId)) {
+    throw 'Produktiver Release blockiert: eine Release-Phase verlangt die Lauf-ID ihres -Publish-Einstiegs.'
+}
+if (-not ($draftPhase -or $promotePhase) -and -not [string]::IsNullOrWhiteSpace($RunId)) {
+    throw '-RunId ist nur fuer interne Release-Phasen zulaessig.'
+}
+if ($promotePhase -and ([string]::IsNullOrWhiteSpace($DraftStateSha256) -or [string]::IsNullOrWhiteSpace($AttestationSha256))) {
+    throw 'Produktiver Release blockiert: die Promotion verlangt einen hashgebundenen Draft-State und eine hashgebundene Clean-Windows-Attestierung.'
+}
+if (-not $promotePhase -and (-not [string]::IsNullOrWhiteSpace($DraftStateSha256) -or -not [string]::IsNullOrWhiteSpace($AttestationSha256))) {
+    throw '-DraftStateSha256 und -AttestationSha256 sind nur fuer die Promote-Phase zulaessig.'
+}
+
 
 function Get-SourceFingerprint {
     param(
@@ -1017,139 +954,6 @@ function Get-ReleaseRepositoryBinding {
     }
 }
 
-function Get-ReleaseTagCommit {
-    param(
-        [Parameter(Mandatory = $true)][string]$GhPath,
-        [Parameter(Mandatory = $true)][string]$ReleaseRepository,
-        [Parameter(Mandatory = $true)][string]$ReleaseTag
-    )
-
-    $directRef = "refs/tags/$ReleaseTag"
-    $peeledRef = "$directRef^{}"
-    $remoteUrl = "https://github.com/$ReleaseRepository.git"
-    $rawRefs = Invoke-NativeCapture -FilePath 'git' -Arguments @(
-        'ls-remote', '--tags', $remoteUrl, $directRef, $peeledRef
-    )
-    if ([string]::IsNullOrWhiteSpace($rawRefs)) {
-        return $null
-    }
-
-    $refs = @($rawRefs -split "`r?`n" | ForEach-Object {
-            if ($_ -notmatch '^(?<sha>[0-9a-f]{40})\s+(?<ref>refs/tags/.+)$') {
-                throw "Unerwartete Tag-Antwort des Release-Repositories: $_"
-            }
-            [pscustomobject]@{ Sha = $Matches.sha; Ref = $Matches.ref }
-        })
-    $directMatches = @($refs | Where-Object { $_.Ref -ceq $directRef })
-    $peeledMatches = @($refs | Where-Object { $_.Ref -ceq $peeledRef })
-    if ($directMatches.Count -ne 1 -or $peeledMatches.Count -gt 1 -or
-        $refs.Count -ne ($directMatches.Count + $peeledMatches.Count)) {
-        throw "Release-Tag $ReleaseTag konnte nicht eindeutig aufgeloest werden."
-    }
-
-    # ^{} wird von Git rekursiv bis zum Nicht-Tag-Objekt aufgeloest. Der API-Aufruf
-    # stellt danach sicher, dass dieses Objekt tatsaechlich ein Commit ist.
-    $candidateCommit = if ($peeledMatches.Count -eq 1) {
-        [string]$peeledMatches[0].Sha
-    }
-    else {
-        [string]$directMatches[0].Sha
-    }
-    $confirmedCommit = Invoke-NativeCapture -FilePath $GhPath -Arguments @(
-        'api', '--hostname', 'github.com',
-        "repos/$ReleaseRepository/git/commits/$candidateCommit",
-        '--jq', '.sha'
-    )
-    if ($confirmedCommit -ne $candidateCommit) {
-        throw "Release-Tag $ReleaseTag zeigt nicht eindeutig auf einen Commit."
-    }
-    return $confirmedCommit
-}
-
-function New-ReleaseTagBinding {
-    param(
-        [Parameter(Mandatory = $true)][string]$GhPath,
-        [Parameter(Mandatory = $true)][string]$ReleaseRepository,
-        [Parameter(Mandatory = $true)][string]$ReleaseTag,
-        [Parameter(Mandatory = $true)][string]$TargetCommit
-    )
-
-    Invoke-Native -FilePath $GhPath -Arguments @(
-        'api', '--hostname', 'github.com', '--method', 'POST',
-        "repos/$ReleaseRepository/git/refs",
-        '-f', "ref=refs/tags/$ReleaseTag",
-        '-f', "sha=$TargetCommit",
-        '--silent'
-    )
-    $createdTagCommit = Get-ReleaseTagCommit `
-        -GhPath $GhPath -ReleaseRepository $ReleaseRepository -ReleaseTag $ReleaseTag
-    if ($createdTagCommit -ne $TargetCommit) {
-        throw "Der neu angelegte Release-Tag $ReleaseTag ist nicht an den geprueften Ziel-Commit gebunden."
-    }
-}
-
-function Get-GitHubReleaseState {
-    param(
-        [Parameter(Mandatory = $true)][string]$GhPath,
-        [Parameter(Mandatory = $true)][string]$ReleaseRepository,
-        [Parameter(Mandatory = $true)][string]$ReleaseTag
-    )
-
-    $releaseJson = Invoke-NativeCapture -FilePath $GhPath -Arguments @(
-        'release', 'view', $ReleaseTag, '--repo', "github.com/$ReleaseRepository",
-        '--json', 'assets,databaseId,isDraft,isImmutable,publishedAt,tagName,targetCommitish'
-    )
-    return ($releaseJson | ConvertFrom-Json)
-}
-
-function Assert-GitHubReleaseState {
-    param(
-        [Parameter(Mandatory = $true)][psobject]$State,
-        [Parameter(Mandatory = $true)][string]$ExpectedDatabaseId,
-        [Parameter(Mandatory = $true)][string]$ExpectedTag,
-        [Parameter(Mandatory = $true)][string]$ExpectedTargetCommit,
-        [Parameter(Mandatory = $true)][bool]$ExpectedDraft,
-        [Parameter(Mandatory = $true)][object[]]$ExpectedAssets,
-        [switch]$RequireImmutable
-    )
-
-    if ([string]$State.databaseId -ne $ExpectedDatabaseId -or
-        [string]$State.tagName -cne $ExpectedTag -or
-        [string]$State.targetCommitish -ne $ExpectedTargetCommit -or
-        [bool]$State.isDraft -ne $ExpectedDraft) {
-        throw "Release $ExpectedTag hat seine gebundene Identitaet oder seinen erwarteten Draft-Status veraendert."
-    }
-    if (-not $ExpectedDraft -and [string]::IsNullOrWhiteSpace([string]$State.publishedAt)) {
-        throw "Release $ExpectedTag besitzt trotz Veroeffentlichung keinen Live-Zeitpunkt."
-    }
-    if ($RequireImmutable -and -not [bool]$State.isImmutable) {
-        throw "Release $ExpectedTag ist veroeffentlicht, aber GitHub schuetzt Tag und Assets nicht unveraenderlich."
-    }
-
-    $duplicateExpectations = @($ExpectedAssets | Group-Object -Property Name | Where-Object { $_.Count -ne 1 })
-    $actualAssets = @($State.assets)
-    if ($duplicateExpectations.Count -gt 0 -or $actualAssets.Count -ne $ExpectedAssets.Count) {
-        throw "Release $ExpectedTag besitzt kein eindeutiges erwartetes Asset-Inventar."
-    }
-    foreach ($expectedAsset in $ExpectedAssets) {
-        $matches = @($actualAssets | Where-Object { [string]$_.name -ceq [string]$expectedAsset.Name })
-        if ($matches.Count -ne 1 -or [Int64]$matches[0].size -ne [Int64]$expectedAsset.Length) {
-            throw "Release-Asset $($expectedAsset.Name) fehlt, ist doppelt oder hat eine unerwartete Groesse."
-        }
-        $digestProperty = $matches[0].PSObject.Properties['digest']
-        $actualDigest = if ($null -ne $digestProperty) {
-            [string]$digestProperty.Value
-        }
-        else {
-            ''
-        }
-        $expectedDigest = "sha256:$([string]$expectedAsset.Sha256)".ToLowerInvariant()
-        if ($actualDigest -notmatch '^sha256:[0-9a-fA-F]{64}$' -or
-            $actualDigest.ToLowerInvariant() -ne $expectedDigest) {
-            throw "GitHub-Digest fuer $($expectedAsset.Name) fehlt oder stimmt nicht mit dem lokal geprueften SHA-256 ueberein."
-        }
-    }
-}
 
 function New-FrozenAssetInventory {
     param(
@@ -1336,7 +1140,7 @@ function Confirm-RemoteReleaseAssets {
     param(
         [Parameter(Mandatory = $true)][string]$GhPath,
         [Parameter(Mandatory = $true)][string]$ReleaseRepository,
-        [Parameter(Mandatory = $true)][string]$ReleaseTag,
+        [Parameter(Mandatory = $true)][psobject]$ReleaseState,
         [Parameter(Mandatory = $true)][string]$DownloadDirectory,
         [Parameter(Mandatory = $true)][object[]]$ExpectedAssets,
         [Parameter(Mandatory = $true)][string]$SignatureVerifierPath,
@@ -1346,16 +1150,33 @@ function Confirm-RemoteReleaseAssets {
         [Parameter(Mandatory = $true)][string]$ExpectedAuthenticodeThumbprint
     )
 
-    if (@(Get-ChildItem -LiteralPath $DownloadDirectory -Force).Count -ne 0) {
+    $downloadRoot = [IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $DownloadDirectory).Path
+    ).TrimEnd([char]'\', [char]'/')
+    if (@(Get-ChildItem -LiteralPath $downloadRoot -Force).Count -ne 0) {
         throw 'Remote-Downloadziel ist nicht leer; lokale Dateien werden nie ueberschrieben.'
     }
-    Invoke-Native -FilePath $GhPath -Arguments @(
-        'release', 'download', $ReleaseTag,
-        '--repo', "github.com/$ReleaseRepository",
-        '--dir', $DownloadDirectory
-    )
+    # Drafts werden ausschliesslich ueber ihre gebundenen numerischen Asset-IDs geladen.
+    # Ein Tag-basierter Download koennte bei mehreren Drafts desselben Namens mehrdeutig sein.
+    foreach ($expected in $ExpectedAssets) {
+        $remoteMatches = @($ReleaseState.assets | Where-Object { [string]$_.name -ceq [string]$expected.Name })
+        if ($remoteMatches.Count -ne 1 -or [string]$remoteMatches[0].id -notmatch '^[0-9]{1,20}$') {
+            throw "Remote-Asset $($expected.Name) besitzt keine eindeutige GitHub-Asset-ID."
+        }
+        $expectedIdProperty = $expected.PSObject.Properties['AssetId']
+        if ($null -ne $expectedIdProperty -and -not [string]::IsNullOrWhiteSpace([string]$expectedIdProperty.Value) -and
+            [string]$expectedIdProperty.Value -ne [string]$remoteMatches[0].id) {
+            throw "Remote-Asset $($expected.Name) besitzt nicht mehr die gebundene GitHub-Asset-ID."
+        }
+        $destination = [IO.Path]::GetFullPath((Join-Path $downloadRoot ([string]$expected.Name)))
+        if (-not $destination.StartsWith($downloadRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Downloadziel fuer $($expected.Name) liegt ausserhalb des Pruefverzeichnisses."
+        }
+        Save-GitHubReleaseAssetById -GhPath $GhPath -ReleaseRepository $ReleaseRepository `
+            -AssetId ([string]$remoteMatches[0].id) -Destination $destination
+    }
     $verified = @(Assert-DownloadedReleaseAssets `
-            -DownloadDirectory $DownloadDirectory -ExpectedAssets $ExpectedAssets)
+            -DownloadDirectory $downloadRoot -ExpectedAssets $ExpectedAssets)
     foreach ($asset in @($verified | Where-Object { $_.RequireAuthenticode })) {
         Assert-AuthenticodeArtifact `
             -Role "Remote-Installer $($asset.Name)" -Path $asset.SourcePath `
@@ -1384,7 +1205,7 @@ function Assert-PublishBinding {
     )
 
     if ([DateTimeOffset]::UtcNow -ge $ExpectedExpiresAtUtc) {
-        throw 'Produktiver Release blockiert: die zeitgebundene Develop-Zentrale-Attestierung ist inzwischen abgelaufen.'
+        throw 'Produktiver Release blockiert: die zeitgebundene Release-Bindung (Zentrale-Preflight bzw. daraus abgeleitete Laufbindung) ist inzwischen abgelaufen.'
     }
 
     if (-not (Test-Path -LiteralPath $ExpectedArtifactPath -PathType Leaf)) {
@@ -1435,7 +1256,7 @@ function Assert-PublishBinding {
         throw 'Produktiver Release blockiert: Cargo.toml wurde waehrend des Release-Laufs veraendert.'
     }
     if ([DateTimeOffset]::UtcNow -ge $ExpectedExpiresAtUtc) {
-        throw 'Produktiver Release blockiert: die zeitgebundene Develop-Zentrale-Attestierung ist waehrend der erneuten Bindungspruefung abgelaufen.'
+        throw 'Produktiver Release blockiert: die zeitgebundene Release-Bindung ist waehrend der erneuten Bindungspruefung abgelaufen.'
     }
 }
 
@@ -1499,22 +1320,127 @@ foreach ($required in @($cargoManifest, $tauriConfig)) {
     }
 }
 
-$legacySingleInvocationPublishEnabled = $false
-$executeLegacySingleInvocationPublish = $Publish -and $legacySingleInvocationPublishEnabled
-if ($Publish -and -not $executeLegacySingleInvocationPublish) {
-    throw 'Produktiver Release blockiert: Die verpflichtende zweiphasige Clean-Windows-Attestierung und die getrennte Draft-Promotion sind noch nicht implementiert. Es wurde kein Release-Draft erzeugt.'
+function Invoke-ReleasePhaseProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$PwshPath,
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$PhaseName,
+        [switch]$InheritSigningSecrets
+    )
+
+    $allArguments = @('-NoProfile', '-NonInteractive', '-File', $ScriptPath) + $Arguments
+    if ($InheritSigningSecrets) {
+        # Nur die Draft-Phase baut und benoetigt deshalb die vom Controller bereitgestellte
+        # Tauri-Signierumgebung. Innerhalb dieser Phase begrenzt Invoke-TauriBundle sie wieder
+        # auf genau einen Paketierungsprozess.
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = $PwshPath
+        $start.UseShellExecute = $false
+        $start.WorkingDirectory = $WorkingDirectory
+        foreach ($argument in $allArguments) {
+            [void]$start.ArgumentList.Add($argument)
+        }
+    }
+    else {
+        $start = New-NativeProcessStartInfo -FilePath $PwshPath -Arguments $allArguments -WorkingDirectory $WorkingDirectory
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) {
+            throw "Release-Phase $PhaseName konnte nicht gestartet werden."
+        }
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
+    if ($exitCode -ne 0) {
+        throw "Produktiver Release abgebrochen: Phase $PhaseName endete mit Exitcode $exitCode. Ein bereits angelegter Draft bleibt privat und wird nicht geloescht."
+    }
 }
 
-# Dieser Altpfad dokumentiert die bereits gehaerteten Draft-Pruefungen, darf aber
-# nicht als Einphasen-Release ausgefuehrt werden. Erst eine getrennte, vom
-# Controller attestierte Promotion darf ihn durch eine neue Architektur ersetzen.
-if ($executeLegacySingleInvocationPublish) {
-    if ($ReleaseRepo -ne "einzigTimo/projectatlas-desktop-releases") {
-        throw "Produktiver Release blockiert: das attestierte Ziel ist einzigTimo/projectatlas-desktop-releases."
+if ($Publish) {
+    # Einziger registrierter Einstieg der Develop Zentrale. Er fuehrt selbst keine
+    # Mutation aus, sondern startet die drei Phasen als getrennte Prozesse und bricht
+    # beim ersten Fehler ab. Das Preflight wird hier nur frueh und ohne Werkzeugkette
+    # geprueft; die verbindliche Bindung uebernimmt die Draft-Phase unmittelbar danach.
+    Write-Step 'Zweiphasigen Release starten: Draft -> Clean-Windows-Attestierung -> Promotion'
+    $preflightCheck = Join-Path $PSScriptRoot 'Assert-ControllerPreflight.ps1'
+    if (-not (Test-Path -LiteralPath $preflightCheck -PathType Leaf)) {
+        throw "Produktiver Release blockiert: Preflight-Pruefer fehlt: $preflightCheck"
     }
-    if ([string]::IsNullOrWhiteSpace($PreflightArtifact)) {
-        throw "Produktiver Release blockiert: -Publish verlangt das Preflight-Artefakt der Develop Zentrale. Einstieg ist die Develop Zentrale, nicht dieses Skript."
+    & $preflightCheck `
+        -ArtifactPath $PreflightArtifact -ProjectRoot $repositoryRoot `
+        -ProjectId 'projectatlas-desktop' -ComponentId 'desktop-release' `
+        -SourcePath $preflightSourcePath `
+        -TargetResourceGroup 'github-release' -TargetAppName 'projectatlas-desktop-releases'
+    $pwshPath = Assert-Tool -Name 'pwsh' -Hint 'PowerShell 7 installieren.'
+    $attestationScript = Join-Path $repositoryRoot 'scripts\Invoke-ProjectAtlasDesktopCleanWindowsAttestation.ps1'
+    if (-not (Test-Path -LiteralPath $attestationScript -PathType Leaf)) {
+        throw "Produktiver Release blockiert: Attestierungsskript fehlt: $attestationScript"
     }
+    $orchestratorRunId = [Guid]::NewGuid().ToString('N')
+    $orchestratorRunDirectory = Get-ReleaseRunDirectory -RunId $orchestratorRunId
+    if (Test-Path -LiteralPath $orchestratorRunDirectory) {
+        throw 'Produktiver Release blockiert: das eindeutige Release-Laufverzeichnis existiert bereits.'
+    }
+    $phaseCommon = @{
+        PwshPath         = $pwshPath
+        WorkingDirectory = $repositoryRoot
+    }
+    $resolvedPreflight = (Resolve-Path -LiteralPath $PreflightArtifact).Path
+    $draftArguments = @(
+        '-ReleasePhase', 'Draft', '-RunId', $orchestratorRunId,
+        '-NotesFile', (Resolve-Path -LiteralPath $NotesFile).Path,
+        '-PreflightArtifact', $resolvedPreflight,
+        '-ReleaseRepo', $ReleaseRepo, '-Confirm:$false'
+    )
+    if ($PSBoundParameters.ContainsKey('Version')) {
+        $draftArguments += @('-Version', $Version)
+    }
+    Write-Host "Release-Lauf: $orchestratorRunId ($orchestratorRunDirectory)"
+
+    Invoke-ReleasePhaseProcess @phaseCommon -PhaseName 'Draft' -InheritSigningSecrets `
+        -ScriptPath $PSCommandPath -Arguments $draftArguments
+    $orchestratorDraftState = Join-Path $orchestratorRunDirectory 'draft-state.json'
+    if (-not (Test-Path -LiteralPath $orchestratorDraftState -PathType Leaf)) {
+        throw 'Produktiver Release abgebrochen: die Draft-Phase hat keinen Draft-State hinterlassen.'
+    }
+    $orchestratorDraftStateSha256 = (Get-FileHash -LiteralPath $orchestratorDraftState -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    Invoke-ReleasePhaseProcess @phaseCommon -PhaseName 'Clean-Windows-Attestierung' `
+        -ScriptPath $attestationScript -Arguments @(
+        '-RunId', $orchestratorRunId, '-DraftStateSha256', $orchestratorDraftStateSha256
+    )
+    $orchestratorAttestation = Join-Path $orchestratorRunDirectory 'attestation.json'
+    if (-not (Test-Path -LiteralPath $orchestratorAttestation -PathType Leaf)) {
+        throw 'Produktiver Release abgebrochen: die Attestierungsphase hat keine Attestierung hinterlassen. Der Draft bleibt privat.'
+    }
+    $orchestratorAttestationSha256 = (Get-FileHash -LiteralPath $orchestratorAttestation -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    Invoke-ReleasePhaseProcess @phaseCommon -PhaseName 'Promotion' `
+        -ScriptPath $PSCommandPath -Arguments @(
+        '-ReleasePhase', 'Promote', '-RunId', $orchestratorRunId,
+        '-DraftStateSha256', $orchestratorDraftStateSha256,
+        '-AttestationSha256', $orchestratorAttestationSha256,
+        '-PreflightArtifact', $resolvedPreflight,
+        '-ReleaseRepo', $ReleaseRepo, '-Confirm:$false'
+    )
+    Write-Step 'Zweiphasiger Release abgeschlossen'
+    return
+}
+
+if ($draftPhase -or $promotePhase) {
+    $runDirectory = Get-ReleaseRunDirectory -RunId $RunId
+    $draftStatePath = Join-Path $runDirectory 'draft-state.json'
+    $attestationPath = Join-Path $runDirectory 'attestation.json'
+}
+
+if ($draftPhase) {
     $preflightCheck = Join-Path $PSScriptRoot "Assert-ControllerPreflight.ps1"
     if (-not (Test-Path -LiteralPath $preflightCheck -PathType Leaf)) {
         throw "Produktiver Release blockiert: Preflight-Pruefer fehlt: $preflightCheck"
@@ -1546,33 +1472,177 @@ if ($executeLegacySingleInvocationPublish) {
         [string]$preflightAttestation.AuthenticodeCertificateThumbprint -replace '\s', ''
     ).ToUpperInvariant()
     if ($attestedCommit -notmatch '^[0-9a-f]{40}$' -or
-        $attestedArtifactSha256 -notmatch '^[0-9a-f]{64}$' -or
-        $attestedSourceTreeSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $attestedArtifactSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        $attestedSourceTreeSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $attestedAuthenticodeThumbprint -notmatch '^[0-9A-F]{40}$' -or
         [string]$preflightAttestation.SourcePath -ne $preflightSourcePath) {
         throw 'Develop-Zentrale-Preflight enthaelt keine vollstaendige Commit-, Quell- und Herausgeberbindung.'
     }
     $attestedCargoSha256 = (Get-FileHash -LiteralPath $cargoManifest -Algorithm SHA256).Hash
+    # Das kurzlebige Preflight muss beim Start der Draft-Phase noch gueltig sein. Danach
+    # bindet eine abgeleitete, strikt begrenzte Laufbindung alle Folgeschritte; Commit-,
+    # Quell-, Arbeitsbaum- und Artefaktdrift blockieren weiterhin bei jeder Pruefung.
     Assert-PublishBinding `
         -RepositoryRoot $repositoryRoot -ExpectedCommit $attestedCommit `
         -ExpectedArtifactPath $attestedArtifactPath -ExpectedArtifactSha256 $attestedArtifactSha256 `
         -SourcePath $preflightSourcePath -ExpectedSourceTreeSha256 $attestedSourceTreeSha256 `
         -ExpectedCargoSha256 $attestedCargoSha256 -ExpectedExpiresAtUtc $attestedExpiresAtUtc
+    $preflightVerifiedAtUtc = [DateTimeOffset]::UtcNow
+    $runDeadlineUtc = $preflightVerifiedAtUtc.AddMinutes((Get-ReleasePhasePolicy).RunBudgetMinutes)
+
+    if (Test-Path -LiteralPath $runDirectory) {
+        throw 'Produktiver Release blockiert: das Release-Laufverzeichnis existiert bereits; Laufzustaende werden nie wiederverwendet.'
+    }
+    [void](New-Item -ItemType Directory -Path $runDirectory)
+}
+
+if ($promotePhase) {
+    Write-Step 'Promotion: Draft-State und Clean-Windows-Attestierung pruefen'
+    $draftState = Read-BoundReleasePhaseDocument -Path $draftStatePath -ExpectedSha256 $DraftStateSha256 -Label 'Draft-State'
+    $attestation = Read-BoundReleasePhaseDocument -Path $attestationPath -ExpectedSha256 $AttestationSha256 -Label 'Clean-Windows-Attestierung'
+    $promotionNow = [DateTimeOffset]::UtcNow
+    Assert-ReleasePhaseProblemsEmpty -Context 'Draft-State' -Problems @(
+        Test-ReleaseDraftStateDocument -State $draftState -RunId $RunId -NowUtc $promotionNow -ForPromotion)
+    Assert-ReleasePhaseProblemsEmpty -Context 'Clean-Windows-Attestierung' -Problems @(
+        Test-ReleasePromotionAuthorization -DraftState $draftState -DraftStateSha256 $DraftStateSha256 `
+            -Attestation $attestation -RunId $RunId -NowUtc $promotionNow)
+    if ([string]$draftState.release_repository -cne $ReleaseRepo) {
+        throw 'Produktiver Release blockiert: Draft-State gehoert zu einem anderen Release-Repository.'
+    }
+
+    $runDeadlineUtc = ConvertTo-ReleasePhaseUtc $draftState.run_deadline_utc
+    $resolvedPromotionPreflight = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $PreflightArtifact).Path)
+    if (-not $resolvedPromotionPreflight.Equals([IO.Path]::GetFullPath([string]$draftState.preflight_artifact_path), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Produktiver Release blockiert: die Promotion erhielt ein anderes Preflight-Artefakt als die Draft-Phase.'
+    }
+    $promotionBinding = @{
+        RepositoryRoot           = $repositoryRoot
+        ExpectedCommit           = [string]$draftState.source_commit
+        ExpectedArtifactPath     = $resolvedPromotionPreflight
+        ExpectedArtifactSha256   = [string]$draftState.preflight_artifact_sha256
+        SourcePath               = $preflightSourcePath
+        ExpectedSourceTreeSha256 = [string]$draftState.source_tree_sha256
+        ExpectedCargoSha256      = [string]$draftState.cargo_sha256
+        ExpectedExpiresAtUtc     = $runDeadlineUtc
+    }
+    Assert-PublishBinding @promotionBinding
+    $promotionVersion = Get-CargoPackageVersion -Path $cargoManifest
+    if ($promotionVersion -cne [string]$draftState.version -or
+        (Get-TauriConfigVersion -Path $tauriConfig) -cne [string]$draftState.version -or
+        (Get-FileHash -LiteralPath $tauriConfig -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([string]$draftState.tauri_config_sha256).ToLowerInvariant()) {
+        throw 'Produktiver Release blockiert: Version oder tauri.conf.json weichen vom Draft-State ab.'
+    }
+
+    $ghPath = Assert-Tool -Name "gh" -Hint "GitHub CLI installieren und mit gh auth login anmelden."
+    Invoke-Native -FilePath $ghPath -Arguments @("auth", "status", "--hostname", "github.com")
+    [void](Get-ReleaseRepositoryBinding -GhPath $ghPath -ReleaseRepository $ReleaseRepo)
+
+    $promotionReleaseId = [string]$draftState.release_id
+    $promotionTag = [string]$draftState.release_tag
+    $promotionReleaseCommit = [string]$draftState.release_repository_commit
+    $promotionThumbprint = [string]$draftState.authenticode_certificate_thumbprint
+    $promotionAssets = @($draftState.assets | ForEach-Object {
+            [pscustomobject]@{
+                Name                = [string]$_.name
+                Length              = [Int64]$_.size
+                Sha256              = [string]$_.sha256
+                AssetId             = [string]$_.asset_id
+                RequireAuthenticode = [bool]$_.require_authenticode
+                RemoteVerified      = $false
+            }
+        })
+
+    $signatureVerifierPath = [string]$draftState.signature_verifier_path
+    if (-not (Test-Path -LiteralPath $signatureVerifierPath -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $signatureVerifierPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([string]$draftState.signature_verifier_sha256).ToLowerInvariant()) {
+        throw 'Produktiver Release blockiert: der Updater-Signaturpruefer der Draft-Phase fehlt oder wurde veraendert.'
+    }
+
+    $assertPromotionDraft = {
+        $currentState = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $promotionReleaseId
+        Assert-GitHubReleaseState -State $currentState -ExpectedDatabaseId $promotionReleaseId `
+            -ExpectedTag $promotionTag -ExpectedTargetCommit $promotionReleaseCommit -ExpectedDraft $true `
+            -ExpectedAssets $promotionAssets
+        $sameTagReleases = @(Get-GitHubReleaseIdsByTag -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $promotionTag)
+        if ($sameTagReleases.Count -ne 1 -or [string]$sameTagReleases[0].Id -ne $promotionReleaseId) {
+            throw "Produktiver Release blockiert: fuer $promotionTag existiert nicht genau der gebundene Draft."
+        }
+        $existingTag = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $promotionTag
+        if (-not [string]::IsNullOrWhiteSpace([string]$existingTag)) {
+            throw "Produktiver Release blockiert: der Versions-Tag $promotionTag existiert vor der Promotion bereits; GitHub wuerde ihn statt des gebundenen Commits verwenden."
+        }
+        return $currentState
+    }
+
+    $verificationRoot = New-ReleaseVerificationRoot
+    try {
+        Write-Step 'Privaten Draft unmittelbar vor der Promotion vollstaendig remote verifizieren'
+        $promotionState = & $assertPromotionDraft
+        $promotionStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'remote-promotion'
+        $installerName = [string]$draftState.updater_installer_name
+        $promotionVerified = @(Confirm-RemoteReleaseAssets -GhPath $ghPath -ReleaseRepository $ReleaseRepo `
+                -ReleaseState $promotionState -DownloadDirectory $promotionStage -ExpectedAssets $promotionAssets `
+                -SignatureVerifierPath $signatureVerifierPath -TauriConfigPath $tauriConfig `
+                -UpdaterInstallerName $installerName `
+                -UpdaterSignatureName ([string]$draftState.updater_signature_name) `
+                -ExpectedAuthenticodeThumbprint $promotionThumbprint)
+        $promotionManifest = Read-VerifiedTextAsset -Asset (Get-VerifiedAsset -Assets $promotionVerified -Name 'latest.json') |
+            ConvertFrom-Json -Depth 10
+        $expectedInstallerUrl = Get-ReleaseDownloadUrl -ReleaseRepository $ReleaseRepo -ReleaseTag $promotionTag -AssetName $installerName
+        if ([string]$promotionManifest.version -cne [string]$draftState.version -or
+            [string]$promotionManifest.platforms.'windows-x86_64'.url -cne $expectedInstallerUrl) {
+            throw 'Produktiver Release blockiert: latest.json im Draft ist nicht an Version und oeffentliche Installer-Adresse gebunden.'
+        }
+
+        if (-not $PSCmdlet.ShouldProcess("$ReleaseRepo ($promotionTag, Draft $promotionReleaseId)", 'attestierten privaten Draft veroeffentlichen')) {
+            return
+        }
+
+        Assert-PublishBinding @promotionBinding
+        [void](& $assertPromotionDraft)
+        $finalNow = [DateTimeOffset]::UtcNow
+        Assert-ReleasePhaseProblemsEmpty -Context 'Clean-Windows-Attestierung unmittelbar vor Freigabe' -Problems @(
+            Test-ReleasePromotionAuthorization -DraftState $draftState -DraftStateSha256 $DraftStateSha256 `
+                -Attestation $attestation -RunId $RunId -NowUtc $finalNow)
+
+        Write-Step "Attestierten Draft $promotionReleaseId veroeffentlichen: $ReleaseRepo@$promotionTag"
+        Publish-GitHubDraftRelease -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $promotionReleaseId
+
+        $publishedRelease = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $promotionReleaseId
+        Assert-GitHubReleaseState -State $publishedRelease -ExpectedDatabaseId $promotionReleaseId `
+            -ExpectedTag $promotionTag -ExpectedTargetCommit $promotionReleaseCommit -ExpectedDraft $false `
+            -ExpectedAssets $promotionAssets -RequireImmutable
+        $publishedTagCommit = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $promotionTag
+        if ($publishedTagCommit -ne $promotionReleaseCommit) {
+            throw "Release $promotionTag ist live, aber sein Git-Tag zeigt nicht auf den gebundenen Release-Repository-Commit."
+        }
+        $publishedInstaller = @($publishedRelease.assets | Where-Object { [string]$_.name -ceq $installerName })
+        if ($publishedInstaller.Count -ne 1 -or [string]$publishedInstaller[0].url -cne $expectedInstallerUrl) {
+            throw "Release $promotionTag ist live, aber die oeffentliche Installer-Adresse weicht von latest.json ab."
+        }
+    }
+    finally {
+        Remove-ReleaseVerificationRoot -VerificationRoot $verificationRoot
+    }
+
+    Write-Step "Fertig"
+    Write-Host "ProjectAtlas Desktop $promotionTag nach Clean-Windows-Attestierung veroeffentlicht unter $ReleaseRepo." -ForegroundColor Green
+    return
 }
 
 $cargoPath = Assert-Tool -Name "cargo" -Hint "Rust-Toolchain installieren (rustup)."
 Invoke-Native -FilePath $cargoPath -Arguments @("tauri", "--version")
 
 $authenticodeConfiguration = Resolve-AuthenticodeConfiguration `
-    -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
+    -Required:($draftPhase -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 if (
-    $executeLegacySingleInvocationPublish -and
+    $draftPhase -and
     $authenticodeConfiguration.Thumbprint -ne $attestedAuthenticodeThumbprint
 ) {
     throw 'Produktiver Release blockiert: das konfigurierte Authenticode-Zertifikat stimmt nicht mit dem von der Develop Zentrale attestierten Herausgeber ueberein.'
 }
 
-if ($executeLegacySingleInvocationPublish) {
+if ($draftPhase) {
     $ghPath = Assert-Tool -Name "gh" -Hint "GitHub CLI installieren und mit gh auth login anmelden."
     $releaseRepoQualified = "github.com/$ReleaseRepo"
     Invoke-Native -FilePath $ghPath -Arguments @("auth", "status", "--hostname", "github.com")
@@ -1595,7 +1665,7 @@ foreach ($check in @(
         throw "$($check.Name) steht auf $($check.Value), angefordert wurde $Version. Erst die Version in Cargo.toml UND tauri.conf.json auf $Version setzen, dann erneut starten."
     }
 }
-if ($executeLegacySingleInvocationPublish) {
+if ($draftPhase) {
     $existingReleaseTagCommit = Get-ReleaseTagCommit `
         -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
     if (-not [string]::IsNullOrWhiteSpace([string]$existingReleaseTagCommit)) {
@@ -1806,13 +1876,13 @@ if (-not $SkipSidecar) {
     Assert-AuthenticodeArtifact `
         -Role 'ProjectAtlas-CLI-Sidecar' -Path $builtSidecarPath `
         -ExpectedThumbprint $expectedAuthenticodeThumbprint `
-        -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
+        -Required:($draftPhase -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 }
 foreach ($artifact in $artifacts) {
     Assert-AuthenticodeArtifact `
         -Role 'Windows-Installer' -Path $artifact.FullName `
         -ExpectedThumbprint $expectedAuthenticodeThumbprint `
-        -Required:($executeLegacySingleInvocationPublish -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
+        -Required:($draftPhase -or $PrepareLocalPackage) -LocalTrustOnly:$PrepareLocalPackage
 }
 
 # Ab hier werden fuer alle Release-Entscheidungen ausschliesslich diese direkt
@@ -1837,7 +1907,10 @@ if ($PrepareLocalPackage) {
 # pruefen waere deshalb ein falscher Negativbefund. Die tatsaechlich installierte
 # Haupt-EXE muss nach der Installation auf einem sauberen Windows-System separat
 # gegen denselben Thumbprint und einen RFC-3161-Zeitstempel geprueft werden.
-Write-Host 'Installierte Haupt-EXE: verpflichtender Clean-System-Installations-E2E nach Bereitstellung; target\release ist dafuer kein gueltiger Ersatz.' -ForegroundColor Yellow
+# Diese Pruefung uebernimmt verpflichtend die getrennte Attestierungsphase
+# (scripts/Invoke-ProjectAtlasDesktopCleanWindowsAttestation.ps1) in einer frischen
+# Windows Sandbox mit den Bytes aus dem privaten Draft - vor jeder Promotion.
+Write-Host 'Installierte Haupt-EXE: verpflichtende Clean-Windows-Attestierung (Windows Sandbox) vor der Promotion; target\release ist dafuer kein gueltiger Ersatz.' -ForegroundColor Yellow
 
 Write-Host ""
 Write-Host "Fertige Artefakte:"
@@ -1846,27 +1919,26 @@ foreach ($upload in $uploads) {
     Write-Host "  $upload ($sizeMb MB)" -ForegroundColor Green
 }
 
-if (-not $executeLegacySingleInvocationPublish) {
+if (-not $draftPhase) {
     Write-Step "Fertig (nichts veroeffentlicht)"
     Write-Host "Kein Upload durchgefuehrt. Produktive Auslieferungen startet ausschliesslich die Develop Zentrale."
     return
 }
+Write-Step "Privaten Release-Draft anlegen: $ReleaseRepo@$releaseTag (keine Veroeffentlichung, kein Git-Tag)"
 
-Write-Step "Release veroeffentlichen: $ReleaseRepo@$releaseTag"
-
-if (-not $PSCmdlet.ShouldProcess("$ReleaseRepo ($releaseTag)", "privaten GitHub-Draft anlegen, remote verifizieren und erst danach veroeffentlichen")) {
+if (-not $PSCmdlet.ShouldProcess("$ReleaseRepo ($releaseTag)", "privaten GitHub-Draft ohne Git-Tag anlegen und remote verifizieren")) {
     return
 }
 
 $publishBindingArguments = @{
     RepositoryRoot           = $repositoryRoot
-    ExpectedCommit          = $attestedCommit
-    ExpectedArtifactPath    = $attestedArtifactPath
-    ExpectedArtifactSha256  = $attestedArtifactSha256
-    SourcePath              = $preflightSourcePath
+    ExpectedCommit           = $attestedCommit
+    ExpectedArtifactPath     = $attestedArtifactPath
+    ExpectedArtifactSha256   = $attestedArtifactSha256
+    SourcePath               = $preflightSourcePath
     ExpectedSourceTreeSha256 = $attestedSourceTreeSha256
-    ExpectedCargoSha256     = $attestedCargoSha256
-    ExpectedExpiresAtUtc    = $attestedExpiresAtUtc
+    ExpectedCargoSha256      = $attestedCargoSha256
+    ExpectedExpiresAtUtc     = $runDeadlineUtc
 }
 $frozenUpdaterInstallerMatches = @($frozenReleaseAssets | Where-Object {
         [IO.Path]::GetFullPath([string]$_.SourcePath).Equals(
@@ -1886,11 +1958,23 @@ if ($frozenUpdaterInstallerMatches.Count -ne 1 -or $frozenUpdaterSignatureMatche
 $frozenUpdaterInstallerName = [string]$frozenUpdaterInstallerMatches[0].Name
 $frozenUpdaterSignatureName = [string]$frozenUpdaterSignatureMatches[0].Name
 
+$assertNoForeignReleaseOrTag = {
+    param([string]$Moment)
+    $existingTag = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
+    if (-not [string]::IsNullOrWhiteSpace([string]$existingTag)) {
+        throw "Produktiver Release blockiert: der Versions-Tag $releaseTag existiert $Moment. Drafts duerfen keinen Tag erzeugen; eine Version wird nie ueberschrieben."
+    }
+}
+
 $verificationRoot = New-ReleaseVerificationRoot
 try {
     $uploadStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'upload-initial'
     $stagedUploads = @(Copy-FrozenAssetsForUpload -FrozenAssets $frozenReleaseAssets -DestinationDirectory $uploadStage)
 
+    # Bewusst ohne Tag-Pflicht und ohne vorab angelegten Tag: GitHub legt fuer einen
+    # Draft keinen Git-Tag an. Er entsteht erst bei der attestierten Promotion auf dem
+    # hier gebundenen, vollstaendigen Release-Repository-Commit (--target). Scheitert die
+    # Attestierung, ist die Version dadurch nicht verbraucht; der Draft bleibt privat.
     $releaseArguments = [Collections.Generic.List[string]]::new()
     $releaseArguments.Add('release')
     $releaseArguments.Add('create')
@@ -1904,63 +1988,44 @@ try {
     $releaseArguments.Add("ProjectAtlas Desktop $releaseTag")
     $releaseArguments.Add('--notes-file')
     $releaseArguments.Add((Resolve-Path -LiteralPath $NotesFile).Path)
-    $releaseArguments.Add('--verify-tag')
+    $releaseArguments.Add('--target')
+    $releaseArguments.Add($releaseRepositoryBinding.TargetCommit)
     $releaseArguments.Add('--draft')
 
     Assert-PublishBinding @publishBindingArguments
-    $tagBeforeDraft = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    if (-not [string]::IsNullOrWhiteSpace([string]$tagBeforeDraft)) {
-        throw "Produktiver Release blockiert: der Versions-Tag $releaseTag wurde waehrend des Release-Laufs angelegt."
-    }
-    if ([DateTimeOffset]::UtcNow -ge $attestedExpiresAtUtc) {
-        throw 'Produktiver Release blockiert: die Develop-Zentrale-Attestierung ist unmittelbar vor der Tag-Erstellung abgelaufen.'
-    }
-    New-ReleaseTagBinding -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag -TargetCommit $releaseRepositoryBinding.TargetCommit
-    if ([DateTimeOffset]::UtcNow -ge $attestedExpiresAtUtc) {
-        throw 'Produktiver Release blockiert: die Develop-Zentrale-Attestierung ist unmittelbar vor der Draft-Erstellung abgelaufen.'
+    & $assertNoForeignReleaseOrTag 'bereits vor der Draft-Erstellung'
+    $releasesBeforeDraft = @(Get-GitHubReleaseIdsByTag -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag)
+    if ($releasesBeforeDraft.Count -ne 0) {
+        throw "Produktiver Release blockiert: fuer $releaseTag existiert bereits ein Release oder privater Draft (ID $(@($releasesBeforeDraft | ForEach-Object { $_.Id }) -join ', ')). Ein nicht attestierter Draft wird nie automatisch geloescht; ihn bewusst entfernen oder die Version erhoehen."
     }
     Invoke-Native -FilePath $ghPath -Arguments $releaseArguments.ToArray()
 
-    $draftRelease = Get-GitHubReleaseState -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    $draftDatabaseId = [string]$draftRelease.databaseId
-    if ([string]::IsNullOrWhiteSpace($draftDatabaseId)) {
-        throw "Privater Release-Draft $releaseTag besitzt keine bindbare GitHub-Identitaet."
+    $releasesAfterDraft = @(Get-GitHubReleaseIdsByTag -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag)
+    if ($releasesAfterDraft.Count -ne 1 -or -not [bool]$releasesAfterDraft[0].IsDraft) {
+        throw "Privater Release-Draft $releaseTag ist nicht eindeutig als Draft auffindbar."
     }
+    $draftDatabaseId = [string]$releasesAfterDraft[0].Id
+    $draftRelease = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $draftDatabaseId
     Assert-GitHubReleaseState -State $draftRelease -ExpectedDatabaseId $draftDatabaseId -ExpectedTag $releaseTag -ExpectedTargetCommit $releaseRepositoryBinding.TargetCommit -ExpectedDraft $true -ExpectedAssets $frozenReleaseAssets
-    $draftTagCommit = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    if ($draftTagCommit -ne $releaseRepositoryBinding.TargetCommit) {
-        throw "Privater Release-Draft $releaseTag verweist auf einen abweichenden Git-Tag."
-    }
+    & $assertNoForeignReleaseOrTag 'nach der Draft-Erstellung unerwartet'
 
-    Write-Step 'Private Remote-Assets herunterladen und kryptografisch gegenpruefen'
+    Write-Step 'Private Remote-Assets per Asset-ID herunterladen und kryptografisch gegenpruefen'
     $remoteInitialStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'remote-initial'
     $remoteVerificationArguments = @{
-        GhPath                           = $ghPath
-        ReleaseRepository                = $ReleaseRepo
-        ReleaseTag                       = $releaseTag
-        DownloadDirectory                = $remoteInitialStage
-        ExpectedAssets                   = $frozenReleaseAssets
-        SignatureVerifierPath            = $signatureVerifierPath
-        TauriConfigPath                  = $tauriConfig
-        UpdaterInstallerName             = $frozenUpdaterInstallerName
-        UpdaterSignatureName             = $frozenUpdaterSignatureName
-        ExpectedAuthenticodeThumbprint   = $attestedAuthenticodeThumbprint
+        GhPath                         = $ghPath
+        ReleaseRepository              = $ReleaseRepo
+        ReleaseState                   = $draftRelease
+        DownloadDirectory              = $remoteInitialStage
+        ExpectedAssets                 = $frozenReleaseAssets
+        SignatureVerifierPath          = $signatureVerifierPath
+        TauriConfigPath                = $tauriConfig
+        UpdaterInstallerName           = $frozenUpdaterInstallerName
+        UpdaterSignatureName           = $frozenUpdaterSignatureName
+        ExpectedAuthenticodeThumbprint = $attestedAuthenticodeThumbprint
     }
     $remoteInitialAssets = @(Confirm-RemoteReleaseAssets @remoteVerificationArguments)
-    $remoteInstaller = Get-VerifiedAsset -Assets $remoteInitialAssets -Name $frozenUpdaterInstallerName
     $remoteSignature = Get-VerifiedAsset -Assets $remoteInitialAssets -Name $frozenUpdaterSignatureName
-    $installerAssetMatches = @($draftRelease.assets | Where-Object { [string]$_.name -ceq $frozenUpdaterInstallerName })
-    if ($installerAssetMatches.Count -ne 1) {
-        throw 'Der remote-verifizierte Updater-Installer besitzt keine eindeutige GitHub-Asset-Identitaet.'
-    }
-    $installerDownloadUrl = [string]$installerAssetMatches[0].url
-    $installerDownloadUri = $null
-    if (-not [Uri]::TryCreate($installerDownloadUrl, [UriKind]::Absolute, [ref]$installerDownloadUri) -or
-        $installerDownloadUri.Scheme -ne [Uri]::UriSchemeHttps -or
-        $installerDownloadUri.Host -ne 'github.com' -or
-        -not [string]::IsNullOrEmpty($installerDownloadUri.UserInfo)) {
-        throw 'GitHub lieferte fuer den remote-verifizierten Installer keine vertrauenswuerdige HTTPS-Downloadadresse.'
-    }
+    $installerPublicUrl = Get-ReleaseDownloadUrl -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag -AssetName $frozenUpdaterInstallerName
 
     Write-Step 'Update-Manifest aus remote-verifizierter Signatur erzeugen'
     $generatedStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'generated'
@@ -1972,7 +2037,7 @@ try {
         platforms = [ordered]@{
             'windows-x86_64' = [ordered]@{
                 signature = (Read-VerifiedTextAsset -Asset $remoteSignature).Trim()
-                url       = $installerDownloadUri.AbsoluteUri
+                url       = $installerPublicUrl
             }
         }
     }
@@ -1991,9 +2056,10 @@ try {
     )
 
     $expectedWithManifest = @($frozenReleaseAssets) + @($frozenManifestAssets)
-    $draftWithManifest = Get-GitHubReleaseState -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
+    $draftWithManifest = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $draftDatabaseId
     Assert-GitHubReleaseState -State $draftWithManifest -ExpectedDatabaseId $draftDatabaseId -ExpectedTag $releaseTag -ExpectedTargetCommit $releaseRepositoryBinding.TargetCommit -ExpectedDraft $true -ExpectedAssets $expectedWithManifest
     $remoteManifestStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'remote-manifest'
+    $remoteVerificationArguments.ReleaseState = $draftWithManifest
     $remoteVerificationArguments.DownloadDirectory = $remoteManifestStage
     $remoteVerificationArguments.ExpectedAssets = $expectedWithManifest
     $remoteManifestAssets = @(Confirm-RemoteReleaseAssets @remoteVerificationArguments)
@@ -2019,41 +2085,76 @@ try {
     )
 
     $expectedReleaseAssets = @($expectedWithManifest) + @($frozenProvenanceAssets)
-    $finalDraftRelease = Get-GitHubReleaseState -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
+    $finalDraftRelease = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $draftDatabaseId
     Assert-GitHubReleaseState -State $finalDraftRelease -ExpectedDatabaseId $draftDatabaseId -ExpectedTag $releaseTag -ExpectedTargetCommit $releaseRepositoryBinding.TargetCommit -ExpectedDraft $true -ExpectedAssets $expectedReleaseAssets
 
-    Write-Step 'Vollstaendigen privaten Draft unmittelbar vor Freigabe erneut verifizieren'
+    Write-Step 'Vollstaendigen privaten Draft abschliessend verifizieren (bleibt privat)'
     $remoteFinalStage = New-ReleaseVerificationStage -VerificationRoot $verificationRoot -Name 'remote-final'
+    $remoteVerificationArguments.ReleaseState = $finalDraftRelease
     $remoteVerificationArguments.DownloadDirectory = $remoteFinalStage
     $remoteVerificationArguments.ExpectedAssets = $expectedReleaseAssets
     [void]@(Confirm-RemoteReleaseAssets @remoteVerificationArguments)
 
     Assert-PublishBinding @publishBindingArguments
-    $finalDraftRelease = Get-GitHubReleaseState -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
+    $finalDraftRelease = Get-GitHubReleaseById -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseId $draftDatabaseId
     Assert-GitHubReleaseState -State $finalDraftRelease -ExpectedDatabaseId $draftDatabaseId -ExpectedTag $releaseTag -ExpectedTargetCommit $releaseRepositoryBinding.TargetCommit -ExpectedDraft $true -ExpectedAssets $expectedReleaseAssets
-    $tagBeforePublish = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    if ($tagBeforePublish -ne $releaseRepositoryBinding.TargetCommit) {
-        throw "Produktiver Release blockiert: der Versions-Tag $releaseTag zeigt unmittelbar vor der Veroeffentlichung auf einen abweichenden Commit."
-    }
-    if ([DateTimeOffset]::UtcNow -ge $attestedExpiresAtUtc) {
-        throw 'Produktiver Release blockiert: die Develop-Zentrale-Attestierung ist unmittelbar vor der oeffentlichen Freigabe abgelaufen.'
-    }
-    Invoke-Native -FilePath $ghPath -Arguments @(
-        'release', 'edit', $releaseTag, '--repo', $releaseRepoQualified,
-        '--verify-tag', '--draft=false'
-    )
+    & $assertNoForeignReleaseOrTag 'nach dem vollstaendigen Draft-Upload unerwartet'
 
-    $publishedRelease = Get-GitHubReleaseState -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    Assert-GitHubReleaseState -State $publishedRelease -ExpectedDatabaseId $draftDatabaseId -ExpectedTag $releaseTag -ExpectedTargetCommit $releaseRepositoryBinding.TargetCommit -ExpectedDraft $false -ExpectedAssets $expectedReleaseAssets -RequireImmutable
-    $publishedTagCommit = Get-ReleaseTagCommit -GhPath $ghPath -ReleaseRepository $ReleaseRepo -ReleaseTag $releaseTag
-    if ($publishedTagCommit -ne $releaseRepositoryBinding.TargetCommit) {
-        throw "Release $releaseTag ist live, aber sein Git-Tag zeigt nicht auf den zuvor gebundenen Release-Repository-Commit."
+    $draftStateAssets = @($expectedReleaseAssets | ForEach-Object {
+            $assetName = [string]$_.Name
+            $remoteAsset = @($finalDraftRelease.assets | Where-Object { [string]$_.name -ceq $assetName })
+            if ($remoteAsset.Count -ne 1 -or [string]$remoteAsset[0].id -notmatch '^[0-9]{1,20}$') {
+                throw "Draft-State kann fuer $assetName keine eindeutige Asset-ID binden."
+            }
+            [ordered]@{
+                name                 = $assetName
+                size                 = [Int64]$_.Length
+                sha256               = [string]$_.Sha256
+                asset_id             = [string]$remoteAsset[0].id
+                require_authenticode = [bool]$_.RequireAuthenticode
+            }
+        })
+    $draftCreatedAtUtc = [DateTimeOffset]::UtcNow
+    $draftExpiresAtUtc = $draftCreatedAtUtc.AddMinutes((Get-ReleasePhasePolicy).DraftStateValidityMinutes)
+    if ($draftExpiresAtUtc -gt $runDeadlineUtc) {
+        $draftExpiresAtUtc = $runDeadlineUtc
     }
+    $draftStateDocument = [ordered]@{
+        schema_version                      = (Get-ReleasePhasePolicy).DraftStateSchema
+        run_id                              = $RunId
+        created_at_utc                      = $draftCreatedAtUtc.ToString('o')
+        preflight_verified_at_utc           = $preflightVerifiedAtUtc.ToString('o')
+        run_deadline_utc                    = $runDeadlineUtc.ToString('o')
+        expires_at_utc                      = $draftExpiresAtUtc.ToString('o')
+        version                             = $Version
+        release_tag                         = $releaseTag
+        release_repository                  = $ReleaseRepo
+        release_id                          = $draftDatabaseId
+        release_repository_commit           = $releaseRepositoryBinding.TargetCommit
+        source_repository                   = $sourceRepository
+        source_commit                       = $attestedCommit
+        source_path                         = $preflightSourcePath
+        source_tree_sha256                  = $attestedSourceTreeSha256.ToLowerInvariant()
+        cargo_sha256                        = $attestedCargoSha256.ToLowerInvariant()
+        tauri_config_sha256                 = (Get-FileHash -LiteralPath $tauriConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+        preflight_artifact_path             = $attestedArtifactPath
+        preflight_artifact_sha256           = $attestedArtifactSha256.ToLowerInvariant()
+        authenticode_certificate_thumbprint = $attestedAuthenticodeThumbprint
+        updater_installer_name              = $frozenUpdaterInstallerName
+        updater_signature_name              = $frozenUpdaterSignatureName
+        signature_verifier_path             = $signatureVerifierPath
+        signature_verifier_sha256           = (Get-FileHash -LiteralPath $signatureVerifierPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        assets                              = $draftStateAssets
+    }
+    Assert-ReleasePhaseProblemsEmpty -Context 'Draft-State vor dem Schreiben' -Problems @(
+        Test-ReleaseDraftStateDocument -State ([pscustomobject]($draftStateDocument | ConvertTo-Json -Depth 8 | ConvertFrom-Json -Depth 8 -DateKind String)) `
+            -RunId $RunId -NowUtc ([DateTimeOffset]::UtcNow))
+    $draftStateSha256 = Write-ReleasePhaseDocument -Path $draftStatePath -Document $draftStateDocument
 }
 finally {
     Remove-ReleaseVerificationRoot -VerificationRoot $verificationRoot
 }
 
-Write-Step "Fertig"
-Write-Host "ProjectAtlas Desktop $releaseTag veroeffentlicht unter $ReleaseRepo." -ForegroundColor Green
-Write-Host "Bereits installierte Ausgaben bieten das Update beim naechsten Pruefen an." -ForegroundColor Green
+Write-Step "Draft-Phase abgeschlossen (nichts veroeffentlicht)"
+Write-Host "Privater Draft $draftDatabaseId fuer $releaseTag ist remote verifiziert und bleibt bis zur attestierten Promotion privat." -ForegroundColor Green
+Write-Host "Draft-State: $draftStatePath (SHA-256 $draftStateSha256)"

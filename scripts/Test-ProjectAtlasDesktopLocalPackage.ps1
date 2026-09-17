@@ -80,10 +80,30 @@ $result = Invoke-TestChild -FilePath $pwshPath -WithoutTools -Arguments @(
 if ($result.ExitCode -eq 0 -or $result.Output -notlike '*verlangt einen exakten -ExpectedCommit*') {
     throw "Lokaler Paketbau akzeptiert fehlenden Quellcommit oder greift vorher auf Werkzeuge zu: $($result.Output)"
 }
-$result = Invoke-TestChild -FilePath $pwshPath -WithoutTools -Arguments @(
-    '-NoProfile', '-File', $releasePath, '-Publish', '-NotesFile', (Join-Path $repositoryRoot 'RELEASE_NOTES.md'))
-if ($result.ExitCode -eq 0 -or $result.Output -notlike '*verpflichtende zweiphasige Clean-Windows-Attestierung*') {
-    throw "Die oeffentliche Publish-Sperre wurde veraendert: $($result.Output)"
+# Der oeffentliche Weg ist zweiphasig: ohne Zentrale-Preflight, Lauf-ID oder gebundene
+# Attestierung muss jeder Einstieg vor Werkzeug-, Git- oder GitHub-Zugriff abbrechen.
+$releaseNotesPath = Join-Path $repositoryRoot 'RELEASE_NOTES.md'
+$publishRejections = @(
+    @{ Scenario = '-Publish ohne Zentrale-Preflight'; Expected = '*verlangt das Preflight-Artefakt*'
+        Arguments = @('-Publish', '-NotesFile', $releaseNotesPath) },
+    @{ Scenario = 'Draft-Phase ohne Zentrale-Preflight'; Expected = '*verlangt das Preflight-Artefakt*'
+        Arguments = @('-ReleasePhase', 'Draft', '-RunId', ('d' * 32), '-NotesFile', $releaseNotesPath) },
+    @{ Scenario = 'Promotion ohne Attestierung'; Expected = '*die Promotion verlangt*'
+        Arguments = @('-ReleasePhase', 'Promote', '-RunId', ('d' * 32), '-PreflightArtifact', $releaseNotesPath, '-DraftStateSha256', ('e' * 64)) },
+    @{ Scenario = 'Promotion ohne Lauf-ID'; Expected = '*Lauf-ID*'
+        Arguments = @('-ReleasePhase', 'Promote', '-PreflightArtifact', $releaseNotesPath, '-DraftStateSha256', ('e' * 64), '-AttestationSha256', ('f' * 64)) },
+    @{ Scenario = 'Phase zusammen mit -Publish'; Expected = '*interne Phase*'
+        Arguments = @('-Publish', '-ReleasePhase', 'Promote', '-NotesFile', $releaseNotesPath) },
+    @{ Scenario = 'Phase zusammen mit lokalem Paket'; Expected = '*interne Phase*'
+        Arguments = @('-PrepareLocalPackage', '-ExpectedCommit', $testCommit, '-ReleasePhase', 'Draft') },
+    @{ Scenario = 'Attestierungshash ausserhalb der Promotion'; Expected = '*AttestationSha256 sind nur*'
+        Arguments = @('-ReleasePhase', 'Draft', '-RunId', ('d' * 32), '-NotesFile', $releaseNotesPath, '-PreflightArtifact', $releaseNotesPath, '-AttestationSha256', ('f' * 64)) }
+)
+foreach ($rejection in $publishRejections) {
+    $result = Invoke-TestChild -FilePath $pwshPath -WithoutTools -Arguments (@('-NoProfile', '-File', $releasePath) + $rejection.Arguments)
+    if ($result.ExitCode -eq 0 -or $result.Output -notlike $rejection.Expected) {
+        throw "Oeffentlicher Releaseweg blockiert '$($rejection.Scenario)' nicht vor dem Werkzeugzugriff: $($result.Output)"
+    }
 }
 
 $tokens = $null

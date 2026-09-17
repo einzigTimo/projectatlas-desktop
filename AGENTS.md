@@ -55,9 +55,23 @@ Agenten in diesem Repository. `CLAUDE.md` importiert ausschließlich diese Datei
 - Installer, Signatur, Updater-Manifest und commitgebundene SHA-256-Provenienz müssen nach dem
   Release live verifiziert werden. Ein Upload oder erfolgreicher Prozess allein ist kein
   Produktivnachweis.
-- `-Publish` bleibt fail-closed blockiert, bis der Controller einen zweiphasigen Ablauf aus
-  privatem Draft, unabhängiger Clean-Windows-Attestierung und erst danach ausgeführter Promotion
-  implementiert. Eine Prüfung erst nach der öffentlichen Freigabe genügt nicht.
+- `-Publish` ist der einzige registrierte Einstieg und führt drei getrennte Prozesse aus:
+  (1) Draft-Phase: Bau, privater GitHub-Draft ohne Git-Tag, Remote-Verifikation, `latest.json` und
+  Provenienz, hashgebundener Draft-State unter `%LOCALAPPDATA%\ProjectAtlas\desktop-release-runs`;
+  (2) Clean-Windows-Attestierung in einer frischen Windows Sandbox mit den Bytes aus dem privaten
+  Draft (Authenticode mit Thumbprint und RFC-3161-Zeitstempel für Installer, installierte Haupt-EXE
+  und Sidecar, Version, Ersteinrichtung, Hauptfenster); (3) Promotion ausschließlich mit frischer,
+  exakt an Draft-State, Draft-ID, Asset-Hashes und Quell-Commit gebundener Attestierung nach erneuter
+  vollständiger Remote-Verifikation. Eine Prüfung erst nach der öffentlichen Freigabe genügt nicht.
+- Das Zentrale-Preflight wird beim Start der Draft-Phase fail-closed geprüft. Danach bindet eine
+  abgeleitete Laufbindung von höchstens 180 Minuten alle Phasen; Commit-, Quell-, Arbeitsbaum- und
+  Artefaktdrift blockieren in jeder Phase. Der Versions-Tag entsteht erst bei der Promotion.
+- Scheitert eine Phase, bleibt ein bereits angelegter Draft privat und wird nie automatisch gelöscht.
+  Vor einem erneuten Lauf derselben Version muss er bewusst entfernt oder die Version erhöht werden.
+- Voraussetzung auf dem Release-Rechner: aktiviertes Windows-Feature „Windows-Sandbox“; ohne sie
+  bricht die Attestierung fail-closed ab.
+- Kein Release wird vorgemerkt, bevor das Wrapper-Timeout der Zentrale an den dreiphasigen Ablauf
+  angepasst und ein Sandbox-Live-Lauf einmal nachgewiesen ist.
 - Technische Plattform- und Systemfreigaben sowie die Fail-closed-Gates der Zentrale bleiben von der
   Regel „keine zweite Chat-Genehmigung“ unberührt.
 

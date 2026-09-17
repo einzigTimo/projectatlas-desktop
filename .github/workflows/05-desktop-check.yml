@@ -50,6 +50,9 @@ jobs:
           $scripts = @(
             ".github/scripts/Assert-ControllerPreflight.ps1",
             ".github/scripts/invoke-desktop-release.ps1",
+            ".github/scripts/ProjectAtlasReleasePhases.ps1",
+            "scripts/Invoke-ProjectAtlasDesktopCleanWindowsAttestation.ps1",
+            "scripts/ProjectAtlasDesktopSandboxProbe.ps1",
             ".github/scripts/ProjectAtlasLocalPackage.ps1",
             ".github/scripts/Capture-ProjectAtlasLocalPayload.ps1",
             "scripts/Prepare-ProjectAtlasDesktopLocal.ps1",

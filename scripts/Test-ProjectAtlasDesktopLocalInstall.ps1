@@ -23,7 +23,8 @@ foreach ($name in @('ProjectAtlasLocalInstall.ps1','Install-ProjectAtlasDesktopL
 }
 $release = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../.github/scripts/invoke-desktop-release.ps1') -Raw
 Assert-Test ($release.Contains('$PrepareLocalPackage -and ($Publish -or $SkipSidecar -or $AllowUnsignedUpdater)')) 'Lokaler Paketmodus muss Publish, SkipSidecar und unsigned explizit ausschliessen.'
-Assert-Test ($release.Contains('$legacySingleInvocationPublishEnabled = $false')) 'Oeffentliche Single-Invocation-Promotion darf durch den lokalen Weg nicht aktiviert werden.'
+Assert-Test (-not $release.Contains('draft=false') -and -not ($release -match 'legacySingleInvocation') -and
+    $release.Contains("'-ReleasePhase', 'Promote'") -and $release.Contains('Test-ReleasePromotionAuthorization')) 'Oeffentliche Freigabe darf nur ueber die attestierte Promote-Phase erreichbar sein, nie ueber den lokalen Weg.'
 $installerScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-ProjectAtlasDesktopLocal.ps1') -Raw
 Assert-Test ($installerScript.Contains('/S /UPDATE /NS /D=$install')) 'NSIS-Updateargumente muessen fest gebunden sein.'
 Assert-Test (-not ($installerScript -match '(?i)gh\s+release|workflow\s+run|git\s+push|truststore|certutil')) 'Lokaler Installer darf keine Veroeffentlichung und keinen Truststore-Import ausloesen.'

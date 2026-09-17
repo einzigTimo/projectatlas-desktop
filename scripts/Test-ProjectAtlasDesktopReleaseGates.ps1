@@ -21,42 +21,113 @@ if ($parseErrors.Count -gt 0) {
     throw "Release-Skript kann fuer den Gate-Test nicht geparst werden: $($parseErrors[0].Message)"
 }
 
-$promotionGuard = 'Produktiver Release blockiert: Die verpflichtende zweiphasige Clean-Windows-Attestierung'
-$legacyPublishFlag = '$legacySingleInvocationPublishEnabled = $false'
-$legacyPublishBinding = '$executeLegacySingleInvocationPublish = $Publish -and $legacySingleInvocationPublishEnabled'
-$legacyPublishGuard = 'if ($Publish -and -not $executeLegacySingleInvocationPublish)'
-$legacyImplementationGuard = 'if ($executeLegacySingleInvocationPublish)'
-$legacyPublishFlagPosition = $releaseScriptText.IndexOf($legacyPublishFlag, [StringComparison]::Ordinal)
-$legacyPublishBindingPosition = $releaseScriptText.IndexOf($legacyPublishBinding, [StringComparison]::Ordinal)
-$legacyPublishGuardPosition = $releaseScriptText.IndexOf($legacyPublishGuard, [StringComparison]::Ordinal)
-$legacyImplementationPosition = $releaseScriptText.IndexOf($legacyImplementationGuard, [StringComparison]::Ordinal)
-$promotionGuardPosition = $releaseScriptText.IndexOf($promotionGuard, [StringComparison]::Ordinal)
-$draftCreatePosition = $releaseScriptText.IndexOf("`$releaseArguments.Add('create')", [StringComparison]::Ordinal)
-$draftPublishPosition = $releaseScriptText.IndexOf("'--verify-tag', '--draft=false'", [StringComparison]::Ordinal)
-if ($legacyPublishFlagPosition -lt 0 -or
-    $legacyPublishBindingPosition -le $legacyPublishFlagPosition -or
-    $legacyPublishGuardPosition -le $legacyPublishBindingPosition -or
-    $promotionGuardPosition -le $legacyPublishGuardPosition -or
-    $legacyImplementationPosition -le $promotionGuardPosition -or
-    $draftCreatePosition -lt 0 -or $draftPublishPosition -lt 0 -or
-    $promotionGuardPosition -gt $draftCreatePosition -or $promotionGuardPosition -gt $draftPublishPosition) {
-    throw 'Der gesperrte Einphasen-Publish-Pfad ist nicht explizit und vor jeder Draft-Erzeugung und -Promotion fail-closed gegated.'
+$phasesScriptPath = Join-Path (Split-Path -Parent $releaseScriptPath) 'ProjectAtlasReleasePhases.ps1'
+$attestationScriptPath = Join-Path $repositoryRoot 'scripts\Invoke-ProjectAtlasDesktopCleanWindowsAttestation.ps1'
+$sandboxProbePath = Join-Path $repositoryRoot 'scripts\ProjectAtlasDesktopSandboxProbe.ps1'
+$parsedSupportScripts = @{}
+foreach ($supportPath in @($phasesScriptPath, $attestationScriptPath, $sandboxProbePath)) {
+    $supportTokens = $null
+    $supportErrors = $null
+    $supportAst = [Management.Automation.Language.Parser]::ParseFile($supportPath, [ref]$supportTokens, [ref]$supportErrors)
+    if ($supportErrors.Count -gt 0) {
+        throw "Release-Phasenskript kann nicht geparst werden: $supportPath - $($supportErrors[0].Message)"
+    }
+    $parsedSupportScripts[$supportPath] = $supportAst
 }
-$legacyImplementationText = $releaseScriptText.Substring($legacyImplementationPosition)
-if ($legacyImplementationText -match '(?<![A-Za-z0-9_])\$Publish(?![A-Za-z0-9_])') {
-    throw 'Der gesperrte Alt-Publish-Code darf nicht direkt vom externen -Publish-Schalter abhaengen.'
+$phasesAst = $parsedSupportScripts[$phasesScriptPath]
+$phasesText = Get-Content -LiteralPath $phasesScriptPath -Raw
+$attestationText = Get-Content -LiteralPath $attestationScriptPath -Raw
+
+# 1. Der Einphasen-Altpfad ist entfernt; der Wrapper selbst kann keinen Draft freigeben.
+if ($releaseScriptText -match 'legacySingleInvocation|executeLegacy') {
+    throw 'Der gesperrte Einphasen-Altpfad ist im Release-Wrapper noch vorhanden.'
+}
+foreach ($forbidden in @('draft=false', "'release', 'edit'", 'git/refs', '--verify-tag', 'New-ReleaseTagBinding')) {
+    if ($releaseScriptText.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Der Release-Wrapper enthaelt einen unzulaessigen Freigabe- oder Tag-Pfad: $forbidden"
+    }
+}
+foreach ($forbidden in @('draft=false', 'Publish-GitHubDraftRelease', "'release', 'create'", "'release', 'edit'", "'--method', 'POST'")) {
+    if ($attestationText.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Die Attestierungsphase darf nichts veroeffentlichen oder anlegen: $forbidden"
+    }
 }
 
+# 2. Die einzige Freigabe liegt in Publish-GitHubDraftRelease und ist nur in der Promote-Phase erreichbar.
+$publishFunction = @($phasesAst.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Publish-GitHubDraftRelease'
+        }, $true))
+$draftFalseCount = ([regex]::Matches($phasesText, 'draft=false')).Count
+if ($publishFunction.Count -ne 1 -or $draftFalseCount -ne 1 -or
+    -not $publishFunction[0].Extent.Text.Contains('draft=false', [StringComparison]::Ordinal)) {
+    throw 'Die Draft-Freigabe ist nicht exklusiv in Publish-GitHubDraftRelease gekapselt.'
+}
+$publishCalls = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Publish-GitHubDraftRelease'
+        }, $true))
+$topLevelIfs = @($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.IfStatementAst] })
+$promoteBlocks = @($topLevelIfs | Where-Object { $_.Clauses.Count -eq 1 -and $_.Clauses[0].Item1.Extent.Text -ceq '$promotePhase' })
+$publishEntryBlocks = @($topLevelIfs | Where-Object { $_.Clauses.Count -eq 1 -and $_.Clauses[0].Item1.Extent.Text -ceq '$Publish' })
+if ($publishCalls.Count -ne 1 -or $promoteBlocks.Count -ne 1 -or
+    $publishCalls[0].Extent.StartOffset -lt $promoteBlocks[0].Extent.StartOffset -or
+    $publishCalls[0].Extent.EndOffset -gt $promoteBlocks[0].Extent.EndOffset) {
+    throw 'Publish-GitHubDraftRelease ist nicht ausschliesslich aus der Promote-Phase erreichbar.'
+}
+$promoteText = $promoteBlocks[0].Extent.Text
+$authorizationOffset = $promoteText.IndexOf('Test-ReleasePromotionAuthorization', [StringComparison]::Ordinal)
+$lastAuthorizationOffset = $promoteText.LastIndexOf('Test-ReleasePromotionAuthorization', [StringComparison]::Ordinal)
+$publishOffsetInPromote = $promoteText.IndexOf('Publish-GitHubDraftRelease', [StringComparison]::Ordinal)
+$remoteVerifyOffset = $promoteText.IndexOf('Confirm-RemoteReleaseAssets', [StringComparison]::Ordinal)
+if ($authorizationOffset -lt 0 -or $remoteVerifyOffset -lt $authorizationOffset -or
+    $lastAuthorizationOffset -le $remoteVerifyOffset -or $publishOffsetInPromote -le $lastAuthorizationOffset -or
+    -not $promoteText.Contains('Read-BoundReleasePhaseDocument -Path $attestationPath', [StringComparison]::Ordinal)) {
+    throw 'Die Promotion prueft Attestierung und Remote-Draft nicht vor der Freigabe.'
+}
+$promoteLastStatement = $promoteBlocks[0].Clauses[0].Item2.Statements[-1]
+$buildOffset = $releaseScriptText.IndexOf('$cargoPath = Assert-Tool -Name "cargo"', [StringComparison]::Ordinal)
+if ($promoteLastStatement.Extent.Text -cne 'return' -or $buildOffset -lt $promoteBlocks[0].Extent.EndOffset) {
+    throw 'Die Promote-Phase endet nicht vor dem Build- und Draft-Pfad.'
+}
+
+# 3. Der registrierte -Publish-Einstieg startet genau drei getrennte Prozesse in fester Reihenfolge.
+if ($publishEntryBlocks.Count -ne 1) {
+    throw 'Der -Publish-Einstieg ist nicht eindeutig.'
+}
+$entryText = $publishEntryBlocks[0].Extent.Text
+$phaseCalls = @($publishEntryBlocks[0].FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-ReleasePhaseProcess'
+        }, $true))
+$draftCallOffset = $entryText.IndexOf("-PhaseName 'Draft'", [StringComparison]::Ordinal)
+$attestCallOffset = $entryText.IndexOf("-PhaseName 'Clean-Windows-Attestierung'", [StringComparison]::Ordinal)
+$promoteCallOffset = $entryText.IndexOf("-PhaseName 'Promotion'", [StringComparison]::Ordinal)
+if ($phaseCalls.Count -ne 3 -or $draftCallOffset -lt 0 -or $attestCallOffset -le $draftCallOffset -or
+    $promoteCallOffset -le $attestCallOffset -or
+    $publishEntryBlocks[0].Clauses[0].Item2.Statements[-1].Extent.Text -cne 'return' -or
+    $entryText.Contains('Publish-GitHubDraftRelease', [StringComparison]::Ordinal) -or
+    $publishEntryBlocks[0].Extent.EndOffset -gt $promoteBlocks[0].Extent.StartOffset) {
+    throw 'Der -Publish-Einstieg startet Draft, Attestierung und Promotion nicht getrennt, geordnet und ohne eigene Freigabe.'
+}
+
+# 4. Die Draft-Phase legt einen Draft ohne Tag an und bindet ihn an den geprueften Commit.
+$draftCreateOffset = $releaseScriptText.IndexOf("`$releaseArguments.Add('create')", [StringComparison]::Ordinal)
+$draftTargetOffset = $releaseScriptText.IndexOf("`$releaseArguments.Add('--target')", [StringComparison]::Ordinal)
+$draftFlagOffset = $releaseScriptText.IndexOf("`$releaseArguments.Add('--draft')", [StringComparison]::Ordinal)
+$draftStateWriteOffset = $releaseScriptText.IndexOf('Write-ReleasePhaseDocument -Path $draftStatePath', [StringComparison]::Ordinal)
+if ($draftCreateOffset -lt $buildOffset -or $draftTargetOffset -le $draftCreateOffset -or
+    $draftFlagOffset -le $draftCreateOffset -or $draftStateWriteOffset -le $draftFlagOffset) {
+    throw 'Die Draft-Phase erzeugt keinen an --target gebundenen privaten Draft mit anschliessendem Draft-State.'
+}
+
+. $phasesScriptPath
 foreach ($functionName in @(
-        'New-NativeProcessStartInfo',
-        'Invoke-NativeCapture',
         'Invoke-TauriBundle',
         'Build-Sidecar',
         'ConvertTo-GitHubRepositorySlug',
         'Get-ReleaseRepositoryBinding',
         'Assert-PublishBinding',
-        'Get-ReleaseTagCommit',
-        'Assert-GitHubReleaseState',
         'New-FrozenAssetInventory',
         'New-ReleaseVerificationRoot',
         'New-ReleaseVerificationStage',
@@ -77,6 +148,11 @@ foreach ($functionName in @(
         throw "Erwartete Funktion fehlt im Release-Skript: $functionName"
     }
     Invoke-Expression $definition.Extent.Text
+}
+foreach ($functionName in @('New-NativeProcessStartInfo', 'Invoke-NativeCapture', 'Get-ReleaseTagCommit', 'Assert-GitHubReleaseState')) {
+    if ($null -eq (Get-Command -Name $functionName -CommandType Function -ErrorAction SilentlyContinue)) {
+        throw "Erwartete Funktion fehlt in ProjectAtlasReleasePhases.ps1: $functionName"
+    }
 }
 
 $script:testMode = 'binding'
@@ -963,6 +1039,308 @@ finally {
     if (Test-Path -LiteralPath $resolvedTempRoot) {
         Remove-Item -LiteralPath $resolvedTempRoot -Recurse -Force
     }
+}
+
+# ---------------------------------------------------------------------------
+# Zweiphasiger Release: Draft-State, Promotion, Sandbox-Ergebnis und Hilfsbausteine
+# ---------------------------------------------------------------------------
+function Copy-GateObject {
+    param([Parameter(Mandatory = $true)][object]$Value)
+    return ($Value | ConvertTo-Json -Depth 12 | ConvertFrom-Json -Depth 12 -DateKind String)
+}
+
+function Assert-GateProblem {
+    param(
+        [AllowEmptyCollection()][string[]]$Problems,
+        [Parameter(Mandatory = $true)][string]$Expected,
+        [Parameter(Mandatory = $true)][string]$Scenario
+    )
+    if (@($Problems | Where-Object { $_ -like "*$Expected*" }).Count -eq 0) {
+        throw "$Scenario wurde nicht fail-closed abgewiesen. Gemeldet: $($Problems -join '; ')"
+    }
+}
+
+function Assert-GateNoProblem {
+    param([AllowEmptyCollection()][string[]]$Problems, [string]$Scenario)
+    if (@($Problems).Count -ne 0) {
+        throw "$Scenario wurde faelschlich abgewiesen: $($Problems -join '; ')"
+    }
+}
+
+$gateNow = [DateTimeOffset]::UtcNow
+$gateRunId = 'd' * 32
+$gateDraftStateSha = 'e' * 64
+$gateInstallerName = 'ProjectAtlas.Desktop_1.2.3_x64-setup.exe'
+$gateDraftState = Copy-GateObject ([ordered]@{
+        schema_version                      = 'projectatlas.desktop.release-draft-state.v1'
+        run_id                              = $gateRunId
+        created_at_utc                      = $gateNow.AddMinutes(-20).ToString('o')
+        preflight_verified_at_utc           = $gateNow.AddMinutes(-30).ToString('o')
+        run_deadline_utc                    = $gateNow.AddMinutes(150).ToString('o')
+        expires_at_utc                      = $gateNow.AddMinutes(100).ToString('o')
+        version                             = '1.2.3'
+        release_tag                         = 'v1.2.3'
+        release_repository                  = 'einzigTimo/projectatlas-desktop-releases'
+        release_id                          = '4242'
+        release_repository_commit           = 'b' * 40
+        source_repository                   = 'einzigTimo/projectatlas-desktop'
+        source_commit                       = 'a' * 40
+        source_path                         = 'crates/projectatlas-desktop/Cargo.toml'
+        source_tree_sha256                  = '3' * 64
+        cargo_sha256                        = '4' * 64
+        tauri_config_sha256                 = '5' * 64
+        preflight_artifact_path             = 'C:\nicht-verwendet\preflight.json'
+        preflight_artifact_sha256           = '6' * 64
+        authenticode_certificate_thumbprint = 'A' * 40
+        updater_installer_name              = $gateInstallerName
+        updater_signature_name              = "$gateInstallerName.sig"
+        signature_verifier_path             = 'C:\nicht-verwendet\verify_updater_signature.exe'
+        signature_verifier_sha256           = '7' * 64
+        assets                              = @(
+            [ordered]@{ name = $gateInstallerName; size = 10; sha256 = '1' * 64; asset_id = '101'; require_authenticode = $true },
+            [ordered]@{ name = "$gateInstallerName.sig"; size = 2; sha256 = '2' * 64; asset_id = '102'; require_authenticode = $false },
+            [ordered]@{ name = 'latest.json'; size = 3; sha256 = '8' * 64; asset_id = '103'; require_authenticode = $false },
+            [ordered]@{ name = 'projectatlas-desktop-v1.2.3.provenance.json'; size = 4; sha256 = '9' * 64; asset_id = '104'; require_authenticode = $false }
+        )
+    })
+$gateAttestation = Copy-GateObject ([ordered]@{
+        schema_version                      = 'projectatlas.desktop.clean-windows-attestation.v1'
+        result                              = 'pass'
+        run_id                              = $gateRunId
+        draft_state_sha256                  = $gateDraftStateSha
+        release_id                          = '4242'
+        release_tag                         = 'v1.2.3'
+        release_repository                  = 'einzigTimo/projectatlas-desktop-releases'
+        release_repository_commit           = 'b' * 40
+        source_commit                       = 'a' * 40
+        version                             = '1.2.3'
+        authenticode_certificate_thumbprint = 'A' * 40
+        assets                              = @($gateDraftState.assets | ForEach-Object {
+                [ordered]@{ name = $_.name; size = $_.size; sha256 = $_.sha256; asset_id = $_.asset_id }
+            })
+        attested_at_utc                     = $gateNow.AddMinutes(-5).ToString('o')
+        expires_at_utc                      = $gateNow.AddMinutes(25).ToString('o')
+    })
+
+# Draft-State
+Assert-GateNoProblem -Scenario 'Gueltiger Draft-State' -Problems @(
+    Test-ReleaseDraftStateDocument -State $gateDraftState -RunId $gateRunId -NowUtc $gateNow)
+$case = Copy-GateObject $gateDraftState
+$case.expires_at_utc = $gateNow.AddMinutes(-1).ToString('o')
+Assert-GateProblem -Expected 'Draft-State ist abgelaufen' -Scenario 'Abgelaufener Draft-State' -Problems @(
+    Test-ReleaseDraftStateDocument -State $case -RunId $gateRunId -NowUtc $gateNow)
+Assert-GateNoProblem -Scenario 'Promotion nach Ablauf des Attestierungsfensters' -Problems @(
+    Test-ReleaseDraftStateDocument -State $case -RunId $gateRunId -NowUtc $gateNow -ForPromotion)
+$case = Copy-GateObject $gateDraftState
+$case.run_deadline_utc = $gateNow.AddMinutes(-1).ToString('o')
+$case.expires_at_utc = $gateNow.AddMinutes(-2).ToString('o')
+Assert-GateProblem -Expected 'Laufbindung ist abgelaufen' -Scenario 'Abgelaufene Laufbindung trotz Promotion' -Problems @(
+    Test-ReleaseDraftStateDocument -State $case -RunId $gateRunId -NowUtc $gateNow -ForPromotion)
+$case = Copy-GateObject $gateDraftState
+$case.run_deadline_utc = $gateNow.AddMinutes(600).ToString('o')
+Assert-GateProblem -Expected 'Gesamtbudget' -Scenario 'Ueberlange Laufbindung' -Problems @(
+    Test-ReleaseDraftStateDocument -State $case -RunId $gateRunId -NowUtc $gateNow)
+$case = Copy-GateObject $gateDraftState
+$case.assets = @($case.assets | Where-Object { $_.name -ne 'latest.json' })
+Assert-GateProblem -Expected 'Pflicht-Asset fehlt' -Scenario 'Draft-State ohne latest.json' -Problems @(
+    Test-ReleaseDraftStateDocument -State $case -RunId $gateRunId -NowUtc $gateNow)
+Assert-GateProblem -Expected 'anderen Release-Lauf' -Scenario 'Draft-State eines anderen Laufs' -Problems @(
+    Test-ReleaseDraftStateDocument -State $gateDraftState -RunId ('0' * 32) -NowUtc $gateNow)
+
+# Promotion
+Assert-GateNoProblem -Scenario 'Gueltige Attestierung' -Problems @(
+    Test-ReleasePromotionAuthorization -DraftState $gateDraftState -DraftStateSha256 $gateDraftStateSha `
+        -Attestation $gateAttestation -RunId $gateRunId -NowUtc $gateNow)
+Assert-GateProblem -Expected 'Attestierung fehlt' -Scenario 'Promotion ohne Attestierung' -Problems @(
+    Test-ReleasePromotionAuthorization -DraftState $gateDraftState -DraftStateSha256 $gateDraftStateSha `
+        -Attestation $null -RunId $gateRunId -NowUtc $gateNow)
+$promotionCases = @(
+    @{ Name = 'abgelaufene Attestierung'; Expected = 'Attestierung ist abgelaufen'; Mutate = { param($a) $a.attested_at_utc = $gateNow.AddMinutes(-19).ToString('o'); $a.expires_at_utc = $gateNow.AddMinutes(-1).ToString('o') } },
+    @{ Name = 'ueberlange Attestierung'; Expected = 'zulaessige Frist'; Mutate = { param($a) $a.expires_at_utc = $gateNow.AddMinutes(90).ToString('o') } },
+    @{ Name = 'falsche Draft-ID'; Expected = 'release_id'; Mutate = { param($a) $a.release_id = '4243' } },
+    @{ Name = 'falscher Quell-Commit'; Expected = 'source_commit'; Mutate = { param($a) $a.source_commit = 'f' * 40 } },
+    @{ Name = 'falscher Release-Repo-Commit'; Expected = 'release_repository_commit'; Mutate = { param($a) $a.release_repository_commit = 'f' * 40 } },
+    @{ Name = 'falscher Asset-Hash'; Expected = 'Attestierte Assets'; Mutate = { param($a) $a.assets[0].sha256 = 'f' * 64 } },
+    @{ Name = 'falsche Asset-ID'; Expected = 'Attestierte Assets'; Mutate = { param($a) $a.assets[1].asset_id = '999' } },
+    @{ Name = 'falscher Thumbprint'; Expected = 'authenticode_certificate_thumbprint'; Mutate = { param($a) $a.authenticode_certificate_thumbprint = 'B' * 40 } },
+    @{ Name = 'falscher Draft-State-Hash'; Expected = 'Hash'; Mutate = { param($a) $a.draft_state_sha256 = 'f' * 64 } },
+    @{ Name = 'roter Befund'; Expected = 'nicht gruen'; Mutate = { param($a) $a.result = 'fail' } },
+    @{ Name = 'fremder Lauf'; Expected = 'anderen Release-Lauf'; Mutate = { param($a) $a.run_id = '0' * 32 } },
+    @{ Name = 'fremdes Schema'; Expected = 'Attestierungsschema'; Mutate = { param($a) $a.schema_version = 'projectatlas.desktop.clean-windows-attestation.v0' } }
+)
+foreach ($promotionCase in $promotionCases) {
+    $case = Copy-GateObject $gateAttestation
+    & $promotionCase.Mutate $case
+    Assert-GateProblem -Expected $promotionCase.Expected -Scenario "Promotion mit $($promotionCase.Name)" -Problems @(
+        Test-ReleasePromotionAuthorization -DraftState $gateDraftState -DraftStateSha256 $gateDraftStateSha `
+            -Attestation $case -RunId $gateRunId -NowUtc $gateNow)
+}
+$lateDraft = Copy-GateObject $gateDraftState
+$lateDraft.expires_at_utc = $gateNow.AddMinutes(-6).ToString('o')
+Assert-GateProblem -Expected 'Draft-State-Frist' -Scenario 'Attestierung nach Draft-State-Ablauf' -Problems @(
+    Test-ReleasePromotionAuthorization -DraftState $lateDraft -DraftStateSha256 $gateDraftStateSha `
+        -Attestation $gateAttestation -RunId $gateRunId -NowUtc $gateNow)
+Assert-GateProblem -Expected 'Attestierung ist nicht an diesen Draft-State gebunden' -Scenario 'Anderer gebundener Draft-State-Hash' -Problems @(
+    Test-ReleasePromotionAuthorization -DraftState $gateDraftState -DraftStateSha256 ('c' * 64) `
+        -Attestation $gateAttestation -RunId $gateRunId -NowUtc $gateNow)
+$problemGateBlocked = $false
+try {
+    Assert-ReleasePhaseProblemsEmpty -Context 'Test' -Problems @('Beispielproblem')
+}
+catch {
+    $problemGateBlocked = $_.Exception.Message -like 'Produktiver Release blockiert*Beispielproblem*'
+}
+if (-not $problemGateBlocked) {
+    throw 'Assert-ReleasePhaseProblemsEmpty blockiert gemeldete Probleme nicht.'
+}
+
+# Sandbox-Ergebnis
+$gateExpectation = [pscustomobject]@{
+    nonce                               = 'f' * 64
+    version                             = '1.2.3'
+    installer_name                      = $gateInstallerName
+    installer_sha256                    = '1' * 64
+    authenticode_certificate_thumbprint = 'A' * 40
+}
+$gateBinary = [ordered]@{ signature_status = 'Valid'; signer_thumbprint = 'A' * 40; timestamp_present = $true; product_version = '1.2.3' }
+$gateSandboxResult = Copy-GateObject ([ordered]@{
+        schema_version           = 'projectatlas.desktop.sandbox-result.v1'
+        nonce                    = 'f' * 64
+        completed                = $true
+        fatal_error              = $null
+        installer                = [ordered]@{ name = $gateInstallerName; sha256 = '1' * 64; signature_status = 'Valid'; signer_thumbprint = 'A' * 40; timestamp_present = $true; product_version = '1.2.3' }
+        installer_exit_code      = 0
+        webview2_before_install  = [ordered]@{ present = $true; version = '130.0.0.0' }
+        webview2                 = [ordered]@{ present = $true; version = '130.0.0.0' }
+        registry_display_version = '1.2.3'
+        main_executable          = $gateBinary
+        sidecar                  = [ordered]@{ signature_status = 'Valid'; signer_thumbprint = 'A' * 40; timestamp_present = $true; product_version = '0.0.0' }
+        first_run                = [ordered]@{ passed = $true; detail = 'ok' }
+        gui                      = [ordered]@{ main_window = $true; responding = $true; title = 'ProjectAtlas Desktop' }
+    })
+Assert-GateNoProblem -Scenario 'Gueltiges Sandbox-Ergebnis' -Problems @(
+    Test-SandboxAttestationResult -Result $gateSandboxResult -Expectation $gateExpectation)
+Assert-GateProblem -Expected 'Sandbox-Ergebnis fehlt' -Scenario 'Fehlendes Sandbox-Ergebnis' -Problems @(
+    Test-SandboxAttestationResult -Result $null -Expectation $gateExpectation)
+$sandboxCases = @(
+    @{ Name = 'Haupt-EXE nicht Valid'; Expected = 'Installierte Haupt-EXE: Authenticode-Status ist nicht Valid'; Mutate = { param($r) $r.main_executable.signature_status = 'NotSigned' } },
+    @{ Name = 'Sidecar nicht Valid'; Expected = 'Installierter Sidecar: Authenticode-Status'; Mutate = { param($r) $r.sidecar.signature_status = 'HashMismatch' } },
+    @{ Name = 'Installer nicht Valid'; Expected = 'Installer: Authenticode-Status'; Mutate = { param($r) $r.installer.signature_status = 'UnknownError' } },
+    @{ Name = 'falscher Thumbprint Haupt-EXE'; Expected = 'Installierte Haupt-EXE: Herausgeber-Thumbprint'; Mutate = { param($r) $r.main_executable.signer_thumbprint = 'B' * 40 } },
+    @{ Name = 'falscher Thumbprint Sidecar'; Expected = 'Installierter Sidecar: Herausgeber-Thumbprint'; Mutate = { param($r) $r.sidecar.signer_thumbprint = 'B' * 40 } },
+    @{ Name = 'fehlender Zeitstempel'; Expected = 'Installierte Haupt-EXE: RFC-3161-Zeitstempel fehlt'; Mutate = { param($r) $r.main_executable.timestamp_present = $false } },
+    @{ Name = 'fehlender Sidecar-Zeitstempel'; Expected = 'Installierter Sidecar: RFC-3161-Zeitstempel fehlt'; Mutate = { param($r) $r.sidecar.timestamp_present = $false } },
+    @{ Name = 'falsche Version'; Expected = 'Programmversion weicht ab'; Mutate = { param($r) $r.main_executable.product_version = '1.2.4' } },
+    @{ Name = 'falsche Registry-Version'; Expected = 'Installationsregistrierung'; Mutate = { param($r) $r.registry_display_version = '1.2.2' } },
+    @{ Name = 'fehlendes Hauptfenster'; Expected = 'Hauptfenster'; Mutate = { param($r) $r.gui.main_window = $false } },
+    @{ Name = 'nicht antwortendes Fenster'; Expected = 'Hauptfenster'; Mutate = { param($r) $r.gui.responding = $false } },
+    @{ Name = 'fehlende WebView2'; Expected = 'WebView2'; Mutate = { param($r) $r.webview2.present = $false } },
+    @{ Name = 'roter Ersteinrichtungs-Smoke'; Expected = 'Ersteinrichtungs-Smoke'; Mutate = { param($r) $r.first_run.passed = $false } },
+    @{ Name = 'NSIS-Fehlercode'; Expected = 'Exitcode 0'; Mutate = { param($r) $r.installer_exit_code = 2 } },
+    @{ Name = 'anderer Installer'; Expected = 'nicht exakt der attestierte Installer'; Mutate = { param($r) $r.installer.sha256 = '0' * 64 } },
+    @{ Name = 'fremde Nonce'; Expected = 'Nonce'; Mutate = { param($r) $r.nonce = '0' * 64 } },
+    @{ Name = 'Abbruch in der Sandbox'; Expected = 'Sandbox meldet Fehler'; Mutate = { param($r) $r.completed = $false; $r.fatal_error = 'Testabbruch' } },
+    @{ Name = 'fremdes Ergebnisschema'; Expected = 'Sandbox-Ergebnisschema'; Mutate = { param($r) $r.schema_version = 'unbekannt' } }
+)
+foreach ($sandboxCase in $sandboxCases) {
+    $case = Copy-GateObject $gateSandboxResult
+    & $sandboxCase.Mutate $case
+    Assert-GateProblem -Expected $sandboxCase.Expected -Scenario "Sandbox-Ergebnis mit $($sandboxCase.Name)" -Problems @(
+        Test-SandboxAttestationResult -Result $case -Expectation $gateExpectation)
+}
+$case = Copy-GateObject $gateSandboxResult
+$case.PSObject.Properties.Remove('main_executable')
+Assert-GateProblem -Expected 'Installierte Haupt-EXE: kein Nachweis' -Scenario 'Sandbox-Ergebnis ohne Haupt-EXE' -Problems @(
+    Test-SandboxAttestationResult -Result $case -Expectation $gateExpectation)
+
+# GitHub-Asset-Identitaet, Download-Adresse und Release-Liste
+$idState = [pscustomobject]@{
+    databaseId = '4242'; tagName = 'v1.2.3'; targetCommitish = 'b' * 40; isDraft = $true; publishedAt = ''
+    assets     = @([pscustomobject]@{ id = '101'; name = 'setup.exe'; size = 10; digest = "sha256:$('1' * 64)"; url = '' })
+}
+$idExpected = @([pscustomobject]@{ Name = 'setup.exe'; Length = 10; Sha256 = '1' * 64; AssetId = '101' })
+Assert-GitHubReleaseState -State $idState -ExpectedDatabaseId '4242' -ExpectedTag 'v1.2.3' `
+    -ExpectedTargetCommit ('b' * 40) -ExpectedDraft $true -ExpectedAssets $idExpected
+$idState.assets[0].id = '999'
+$assetIdBlocked = $false
+try {
+    Assert-GitHubReleaseState -State $idState -ExpectedDatabaseId '4242' -ExpectedTag 'v1.2.3' `
+        -ExpectedTargetCommit ('b' * 40) -ExpectedDraft $true -ExpectedAssets $idExpected
+}
+catch {
+    $assetIdBlocked = $_.Exception.Message -like '*gebundene GitHub-Asset-ID*'
+}
+if (-not $assetIdBlocked) {
+    throw 'Ein ausgetauschtes Draft-Asset mit neuer Asset-ID wurde nicht blockiert.'
+}
+$apiState = ConvertFrom-GitHubReleaseApi -Json '{"id":4242,"tag_name":"v1.2.3","target_commitish":"bbbb","draft":true,"immutable":false,"published_at":null,"assets":[{"id":101,"name":"setup.exe","size":10,"digest":"sha256:abc","browser_download_url":"https://github.com/o/r/releases/download/untagged-1/setup.exe"}]}'
+if ($apiState.databaseId -ne '4242' -or -not $apiState.isDraft -or $apiState.assets[0].id -ne '101' -or $apiState.assets[0].size -ne 10) {
+    throw 'Die REST-Antwort eines Drafts wird nicht korrekt auf die Release-Bindung abgebildet.'
+}
+if ((Get-ReleaseDownloadUrl -ReleaseRepository 'einzigTimo/projectatlas-desktop-releases' -ReleaseTag 'v1.2.3' -AssetName $gateInstallerName) -cne
+    "https://github.com/einzigTimo/projectatlas-desktop-releases/releases/download/v1.2.3/$gateInstallerName") {
+    throw 'Die oeffentliche Installer-Adresse fuer latest.json wird nicht deterministisch gebildet.'
+}
+$badUrlBlocked = $false
+try { [void](Get-ReleaseDownloadUrl -ReleaseRepository 'o/r' -ReleaseTag 'untagged-1' -AssetName 'setup.exe') }
+catch { $badUrlBlocked = $true }
+if (-not $badUrlBlocked) {
+    throw 'Eine untagged-Draft-Adresse wurde als oeffentliche Manifest-Adresse akzeptiert.'
+}
+& {
+    function Invoke-NativeCapture {
+        param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory)
+        return "11`tv1.2.3`ttrue`n12`tv1.2.2`tfalse`n13`tv1.2.3`tfalse"
+    }
+    $tagMatches = @(Get-GitHubReleaseIdsByTag -GhPath 'gh-test' -ReleaseRepository 'o/r' -ReleaseTag 'v1.2.3')
+    if ($tagMatches.Count -ne 2 -or $tagMatches[0].Id -ne '11' -or -not $tagMatches[0].IsDraft -or $tagMatches[1].IsDraft) {
+        throw 'Drafts und Releases desselben Tags werden nicht vollstaendig erkannt.'
+    }
+}
+
+# Phasendokumente sind unveraenderlich und hashgebunden
+$documentRoot = New-ReleaseVerificationRoot
+try {
+    $documentPath = Join-Path $documentRoot 'draft-state.json'
+    $documentSha = Write-ReleasePhaseDocument -Path $documentPath -Document ([ordered]@{ run_id = $gateRunId })
+    if ((Read-BoundReleasePhaseDocument -Path $documentPath -ExpectedSha256 $documentSha -Label 'Test').run_id -cne $gateRunId) {
+        throw 'Ein hashgebundenes Phasendokument wird nicht gelesen.'
+    }
+    $overwriteDocumentBlocked = $false
+    try { [void](Write-ReleasePhaseDocument -Path $documentPath -Document ([ordered]@{ run_id = 'x' })) }
+    catch { $overwriteDocumentBlocked = $true }
+    if (-not $overwriteDocumentBlocked) {
+        throw 'Ein vorhandenes Phasendokument wurde ueberschrieben.'
+    }
+    [IO.File]::WriteAllText($documentPath, '{"run_id":"manipuliert"}')
+    $tamperBlocked = $false
+    try { [void](Read-BoundReleasePhaseDocument -Path $documentPath -ExpectedSha256 $documentSha -Label 'Test') }
+    catch { $tamperBlocked = $_.Exception.Message -like '*veraendert oder ausgetauscht*' }
+    if (-not $tamperBlocked) {
+        throw 'Ein manipuliertes Phasendokument wurde akzeptiert.'
+    }
+
+    # Windows-Sandbox-Konfiguration: Eingabe read-only, nur Ergebnis schreibbar
+    $wsbInput = Join-Path $documentRoot 'input'
+    $wsbResult = Join-Path $documentRoot 'result'
+    [xml]$wsb = New-CleanWindowsSandboxConfiguration -InputDirectory $wsbInput -ResultDirectory $wsbResult -Networking 'Enable'
+    $folders = @($wsb.Configuration.MappedFolders.MappedFolder)
+    if ($folders.Count -ne 2 -or
+        $folders[0].HostFolder -cne $wsbInput -or $folders[0].ReadOnly -cne 'true' -or $folders[0].SandboxFolder -cne 'C:\AtlasAttestation\input' -or
+        $folders[1].HostFolder -cne $wsbResult -or $folders[1].ReadOnly -cne 'false' -or $folders[1].SandboxFolder -cne 'C:\AtlasAttestation\result' -or
+        $wsb.Configuration.ClipboardRedirection -cne 'Disable' -or $wsb.Configuration.Networking -cne 'Enable' -or
+        -not ([string]$wsb.Configuration.LogonCommand.Command).Contains('C:\AtlasAttestation\input\sandbox-probe.ps1', [StringComparison]::Ordinal)) {
+        throw 'Die Windows-Sandbox-Konfiguration mappt Eingabe/Ergebnis oder den LogonCommand nicht sicher.'
+    }
+    $relativeWsbBlocked = $false
+    try { [void](New-CleanWindowsSandboxConfiguration -InputDirectory 'input' -ResultDirectory $wsbResult -Networking 'Disable') }
+    catch { $relativeWsbBlocked = $true }
+    if (-not $relativeWsbBlocked) {
+        throw 'Ein relativer Sandbox-Hostordner wurde akzeptiert.'
+    }
+}
+finally {
+    Remove-ReleaseVerificationRoot -VerificationRoot $documentRoot
 }
 
 Write-Host 'ProjectAtlas-Desktop-Release-Gates: PASS' -ForegroundColor Green
