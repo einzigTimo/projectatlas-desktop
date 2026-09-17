@@ -60,9 +60,11 @@ window.PAD.activity = (function () {
       time.title = fmt.dateTime(entry.createdAtEpoch);
 
       const saved = document.createElement("span");
-      const value = typeof entry.saved === "number" ? entry.saved : 0;
+      // Output-only calls carry no measured counterpart and therefore no saving.
+      const measured = typeof entry.saved === "number";
+      const value = measured ? entry.saved : 0;
       saved.className = "saved" + (value < 0 ? " neg" : "");
-      saved.textContent = (value > 0 ? "+" : "") + fmt.int(value);
+      saved.textContent = measured ? (value > 0 ? "+" : "") + fmt.int(value) + " B" : fmt.DASH;
 
       row.appendChild(time);
       row.appendChild(describe(entry));

@@ -3964,7 +3964,7 @@ mod tests {
         drop(connection);
 
         let expected_overview = TokenOverview::from_events(&events);
-        let expected_periods = vec![
+        let mut expected_periods = vec![
             TokenTrendPeriod::from_buckets(
                 "2026-06".to_string(),
                 TokenOverview::from_events(&events[..2]).buckets,
@@ -3974,26 +3974,25 @@ mod tests {
                 TokenOverview::from_events(&events[2..]).buckets,
             ),
         ];
+        // Legacy rows keep their call counts while their sizes stay excluded.
+        expected_periods[0].calls = TokenOverview::from_events(&events[..2]).calls;
+        expected_periods[1].calls = TokenOverview::from_events(&events[2..]).calls;
         let store = AtlasStore::open_for_project(&db_path, &root)?;
         let migrated_overview = store.token_overview(Some("preserved-session"))?;
         let migrated_totals = (
             migrated_overview.calls,
-            migrated_overview.estimated_without_projectatlas,
-            migrated_overview.estimated_with_projectatlas,
-            migrated_overview.estimated_saved,
-            migrated_overview.tokens_avoided,
-            migrated_overview.repeated_baselines_deduped,
-            migrated_overview.likely_file_reads_avoided,
+            migrated_overview.measured_calls,
+            migrated_overview.excluded_unmeasured_calls,
+            migrated_overview.output_bytes,
+            migrated_overview.saved_bytes,
             &migrated_overview.buckets,
         );
         let expected_totals = (
             expected_overview.calls,
-            expected_overview.estimated_without_projectatlas,
-            expected_overview.estimated_with_projectatlas,
-            expected_overview.estimated_saved,
-            expected_overview.tokens_avoided,
-            expected_overview.repeated_baselines_deduped,
-            expected_overview.likely_file_reads_avoided,
+            expected_overview.measured_calls,
+            expected_overview.excluded_unmeasured_calls,
+            expected_overview.output_bytes,
+            expected_overview.saved_bytes,
             &expected_overview.buckets,
         );
         if migrated_totals != expected_totals {

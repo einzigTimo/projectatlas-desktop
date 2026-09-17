@@ -38,8 +38,8 @@ use projectatlas_core::symbols::{
     CodeSymbol, ParserKind, RelationKind, SymbolGraph, SymbolKind, SymbolRelation,
 };
 use projectatlas_core::telemetry::{
-    READ_AVOIDANCE_CONFIDENCE_MODELED, READ_AVOIDANCE_SCOPE,
-    TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE, TOKEN_BASELINE_DIRECTORY_WALK, usage_from_estimates,
+    TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_REPORT_MEASUREMENT, TOKEN_REPORT_SAVINGS_BASIS,
+    TOKEN_REPORT_UNIT, usage_from_estimates, usage_from_text,
 };
 use projectatlas_core::{NodeKind, PurposeSource, normalize_native_path_display};
 use projectatlas_db::{
@@ -491,7 +491,7 @@ fn token_tui_cli_respects_selected_terminal_viewport() -> Result<(), Box<dyn Err
             40,
             4,
             vec!["token", "--view", "tui"],
-            "ProjectAtlas Token Impact",
+            "ProjectAtlas Token Telemetry",
         ),
         (
             40,
@@ -499,12 +499,12 @@ fn token_tui_cli_respects_selected_terminal_viewport() -> Result<(), Box<dyn Err
             vec!["token", "--session", "界", "--view", "tui"],
             "界",
         ),
-        (80, 49, vec!["token", "--view", "tui"], "Average avoided:"),
+        (80, 49, vec!["token", "--view", "tui"], "Measured saving:"),
         (
             80,
             50,
             vec!["token", "--view", "tui"],
-            "A V E R A G E   T O K E N S   A V O I D E D",
+            "M E A S U R E D   B Y T E S   S A V E D",
         ),
         (
             40,
@@ -522,7 +522,7 @@ fn token_tui_cli_respects_selected_terminal_viewport() -> Result<(), Box<dyn Err
             80,
             30,
             vec!["token", "--view", "tui", "--trend", "month"],
-            "S A V E D   T O K E N S   T R E N D",
+            "M E A S U R E D   B Y T E S   S A V E D   T R E N D",
         ),
     ] {
         let output = Command::new(mcp_contract_executable())
@@ -7585,8 +7585,8 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
             .into());
         }
     }
-    let about_claim = "Every file not opened. Every folder not explored. ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph, reducing token costs by over 90%.";
-    let about_qualification = "The \"over 90%\" figure is a workload-specific local estimate from the published audit, not a universal savings guarantee or provider-billing result; see [One Large-Application Audit](#one-large-application-audit).";
+    let about_claim = "ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph so they can narrow before they read broadly.";
+    let about_qualification = "Token telemetry reports measured UTF-8 bytes only; a saving is shown only where the same call loaded the complete file. Summaries and slices shrink large-file reads; short lookups are often smaller with plain search.";
     if readme.matches(about_claim).count() != 1
         || !readme.contains(&format!("{about_claim}\n\n{about_qualification}"))
     {
@@ -7598,7 +7598,7 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
     for required in [
         "### Runtime installation and repair",
         "### Token reporting and human TUI",
-        "remain in the exact source ledger",
+        "remain in the exact\nmeasured-call ledger",
         "rather than adding standalone bar panels",
     ] {
         if !agent_integration.contains(required) {
@@ -7609,8 +7609,8 @@ fn repository_guidance_keeps_atlas_state_local_and_legacy_export_optional()
         }
     }
     for required in [
-        "separate proportional bars for observed and modeled file reads avoided",
-        "retained in the exact source ledger and navigation composition",
+        "the exact file-minus-output byte equation as separate proportional bars",
+        "retained in the exact measured-call ledger",
         "at wide terminal sizes, a bounded Atlas map",
     ] {
         if !public_docs_index.contains(required) {
@@ -13478,13 +13478,13 @@ fn plugin_update_replaces_stale_runtime_configs_and_launches_new_mcp() -> Result
             "Shared plugin update state",
             PurposeSource::Agent,
         )?;
-        store.record_usage(&usage_from_estimates(
+        store.record_usage(&usage_from_text(
             "plugin-update",
             "summary",
             Some("src/a.rs".to_string()),
             None,
-            200,
-            50,
+            &"x".repeat(200),
+            &"x".repeat(50),
         ))?;
         let duplicate = store
             .unresolved_health_findings(&[])?
@@ -17998,8 +17998,12 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         .success()
         .stdout(predicate::str::contains("token_savings:"))
         .stdout(predicate::str::contains("detail_availability: retained"))
-        .stdout(predicate::str::contains("read_avoidance:"))
-        .stdout(predicate::str::contains("likely_file_reads_avoided"));
+        .stdout(predicate::str::contains("unit: utf8_bytes"))
+        .stdout(predicate::str::contains("full_file_comparison:"))
+        .stdout(predicate::str::contains("tokens_avoided").not())
+        .stdout(predicate::str::contains("modeled").not())
+        .stdout(predicate::str::contains("directory_walk").not())
+        .stdout(predicate::str::contains("policy_estimate").not());
     let raw_token = Command::cargo_bin("projectatlas")?
         .arg("--format")
         .arg("json")
@@ -18011,145 +18015,67 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         return Err(io::Error::other("json token command failed").into());
     }
     let token_json: Value = serde_json::from_slice(&raw_token.stdout)?;
-    require_json_string(&token_json, &["estimate_kind"], "heuristic")?;
-    require_json_string(&token_json, &["estimator"], "chars_or_bytes_div_ceil_4")?;
-    require_json_string(
-        &token_json,
-        &["estimate_scope"],
-        "workflow_payload_estimate_not_model_billing_tokens",
-    )?;
+    require_json_string(&token_json, &["unit"], TOKEN_REPORT_UNIT)?;
+    require_json_string(&token_json, &["measurement"], TOKEN_REPORT_MEASUREMENT)?;
+    require_json_string(&token_json, &["savings_basis"], TOKEN_REPORT_SAVINGS_BASIS)?;
     require_json_string(&token_json, &["detail_availability"], "retained")?;
     require_json_usize_at_least(&token_json, &["calls"], 7)?;
-    require_json_usize_greater_than(&token_json, &["estimated_without_projectatlas"], 0)?;
-    require_json_usize_greater_than(&token_json, &["estimated_with_projectatlas"], 0)?;
-    require_json_i64_greater_than(&token_json, &["estimated_saved"], 0)?;
-    require_json_i64_greater_than(&token_json, &["legacy_gross_estimated_saved"], 0)?;
-    require_json_i64_greater_than(&token_json, &["measured_tokens_saved"], 0)?;
-    require_json_i64_greater_than(&token_json, &["gross_modeled_tokens_avoided"], 0)?;
-    require_json_i64_greater_than(&token_json, &["deduped_modeled_tokens_avoided"], 0)?;
-    require_json_i64_greater_than(&token_json, &["average_modeled_tokens_avoided"], 0)?;
-    require_json_i64_greater_than(&token_json, &["average_tokens_avoided"], 0)?;
-    require_json_i64_greater_than(&token_json, &["maximum_tokens_avoided"], 0)?;
-    require_json_i64_greater_than(&token_json, &["tokens_avoided"], 0)?;
-    require_json_usize(
-        &token_json,
-        &["average_policy", "directory_walk_baseline_percent"],
-        50,
-    )?;
-    require_json_usize(
-        &token_json,
-        &["average_policy", "atlas_payload_percent"],
-        100,
-    )?;
-    require_json_string(
-        &token_json,
-        &["average_policy", "evidence"],
-        "fixed_policy_estimate_not_benchmark_or_provider_measurement",
-    )?;
-    require_json_usize_greater_than(&token_json, &["observed_file_read_replacements"], 0)?;
-    require_json_usize_greater_than(&token_json, &["modeled_file_reads_avoided"], 0)?;
-    require_json_usize_greater_than(&token_json, &["likely_file_reads_avoided"], 0)?;
-    let estimated_without = token_json["estimated_without_projectatlas"]
+    require_json_usize_at_least(&token_json, &["measured_calls"], 7)?;
+    require_json_usize(&token_json, &["excluded_unmeasured_calls"], 0)?;
+    require_json_usize_greater_than(&token_json, &["output_bytes"], 0)?;
+    require_json_usize_greater_than(&token_json, &["compared_calls"], 0)?;
+    require_json_usize_greater_than(&token_json, &["compared_source_bytes"], 0)?;
+    require_json_usize_greater_than(&token_json, &["compared_output_bytes"], 0)?;
+    for forbidden in [
+        "estimated_saved",
+        "tokens_avoided",
+        "average_policy",
+        "modeled_file_reads_avoided",
+        "likely_file_reads_avoided",
+        "read_avoidance_confidence",
+    ] {
+        if token_json.get(forbidden).is_some() {
+            return Err(io::Error::other(format!("token report still exposes {forbidden}")).into());
+        }
+    }
+    let compared_source = token_json["compared_source_bytes"]
         .as_i64()
-        .ok_or_else(|| io::Error::other("estimated_without_projectatlas missing"))?;
-    let estimated_with = token_json["estimated_with_projectatlas"]
+        .ok_or_else(|| io::Error::other("compared_source_bytes missing"))?;
+    let compared_output = token_json["compared_output_bytes"]
         .as_i64()
-        .ok_or_else(|| io::Error::other("estimated_with_projectatlas missing"))?;
-    let estimated_saved = token_json["estimated_saved"]
+        .ok_or_else(|| io::Error::other("compared_output_bytes missing"))?;
+    let saved_bytes = token_json["saved_bytes"]
         .as_i64()
-        .ok_or_else(|| io::Error::other("estimated_saved missing"))?;
-    if estimated_without.saturating_sub(estimated_with) != estimated_saved {
+        .ok_or_else(|| io::Error::other("saved_bytes missing"))?;
+    if compared_source.saturating_sub(compared_output) != saved_bytes {
         return Err(io::Error::other(format!(
-            "estimated token totals do not reconcile: {estimated_without} - {estimated_with} != {estimated_saved}"
+            "measured byte totals do not reconcile: {compared_source} - {compared_output} != {saved_bytes}"
         ))
         .into());
     }
-    let measured_saved = token_json["measured_tokens_saved"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("measured_tokens_saved missing"))?;
-    let deduped_modeled_saved = token_json["deduped_modeled_tokens_avoided"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("deduped_modeled_tokens_avoided missing"))?;
-    let average_modeled_saved = token_json["average_modeled_tokens_avoided"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("average_modeled_tokens_avoided missing"))?;
-    let average_tokens_avoided = token_json["average_tokens_avoided"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("average_tokens_avoided missing"))?;
-    let maximum_tokens_avoided = token_json["maximum_tokens_avoided"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("maximum_tokens_avoided missing"))?;
-    let tokens_avoided = token_json["tokens_avoided"]
-        .as_i64()
-        .ok_or_else(|| io::Error::other("tokens_avoided missing"))?;
-    if measured_saved.saturating_add(average_modeled_saved) != average_tokens_avoided {
-        return Err(io::Error::other(format!(
-            "average_tokens_avoided does not reconcile: {measured_saved} + {average_modeled_saved} != {average_tokens_avoided}"
-        ))
-        .into());
-    }
-    if measured_saved.saturating_add(deduped_modeled_saved) != maximum_tokens_avoided {
-        return Err(io::Error::other(format!(
-            "maximum_tokens_avoided does not reconcile: {measured_saved} + {deduped_modeled_saved} != {maximum_tokens_avoided}"
-        ))
-        .into());
-    }
-    if tokens_avoided != average_tokens_avoided {
-        return Err(io::Error::other(format!(
-            "tokens_avoided compatibility alias does not match average: {tokens_avoided} != {average_tokens_avoided}"
-        ))
-        .into());
-    }
-    let observed_reads = token_json["observed_file_read_replacements"]
-        .as_u64()
-        .ok_or_else(|| io::Error::other("observed_file_read_replacements missing"))?;
-    let modeled_reads = token_json["modeled_file_reads_avoided"]
-        .as_u64()
-        .ok_or_else(|| io::Error::other("modeled_file_reads_avoided missing"))?;
-    let likely_reads = token_json["likely_file_reads_avoided"]
-        .as_u64()
-        .ok_or_else(|| io::Error::other("likely_file_reads_avoided missing"))?;
-    if observed_reads.saturating_add(modeled_reads) != likely_reads {
-        return Err(io::Error::other(format!(
-            "file-read avoidance totals do not reconcile: {observed_reads} + {modeled_reads} != {likely_reads}"
-        ))
-        .into());
-    }
-    require_json_string(&token_json, &["read_avoidance_scope"], READ_AVOIDANCE_SCOPE)?;
-    require_json_string(
-        &token_json,
-        &["read_avoidance_confidence"],
-        READ_AVOIDANCE_CONFIDENCE_MODELED,
-    )?;
     let buckets = token_json["buckets"]
         .as_array()
         .ok_or_else(|| io::Error::other("token buckets missing from json report"))?;
     if !buckets.iter().any(|bucket| {
         bucket["token_savings_bucket"] == "full_file_compression"
-            && bucket["accuracy"] == "heuristic_estimate"
-            && bucket["baseline_kind"] == "full_file"
-            && bucket["confidence"] == "observed"
+            && bucket["accuracy"] == "exact"
+            && bucket["estimate_method"] == "utf8_bytes_exact"
             && bucket["accounting_layer"] == "observed_delta"
     }) {
-        return Err(io::Error::other("full-file compression token bucket missing").into());
+        return Err(io::Error::other("measured full-file comparison bucket missing").into());
     }
     if !buckets.iter().any(|bucket| {
-        bucket["token_savings_bucket"] == "navigation_avoidance"
-            && bucket["accuracy"] == "heuristic_estimate"
-            && bucket["baseline_kind"] == "directory_walk"
-            && bucket["confidence"] == "policy_estimate"
-            && bucket["accounting_layer"] == "modeled_avoidance"
+        bucket["token_savings_bucket"] == "atlas_output"
+            && bucket["accounting_layer"] == "observed_output"
+            && bucket["saved_bytes"].is_null()
     }) {
-        return Err(io::Error::other("directory-walk navigation token bucket missing").into());
+        return Err(io::Error::other("measured output-only bucket missing").into());
     }
-    if !buckets.iter().any(|bucket| {
-        bucket["token_savings_bucket"] == "navigation_avoidance"
-            && bucket["accuracy"] == "heuristic_estimate"
-            && bucket["baseline_kind"] == "selected_candidates"
-            && bucket["confidence"] == "inferred"
-            && bucket["accounting_layer"] == "modeled_avoidance"
-    }) {
-        return Err(io::Error::other("selected-candidates navigation token bucket missing").into());
+    if buckets
+        .iter()
+        .any(|bucket| bucket["estimate_method"] != "utf8_bytes_exact")
+    {
+        return Err(io::Error::other("token report exposed an unmeasured bucket").into());
     }
     let calibrated_token = Command::cargo_bin("projectatlas")?
         .arg("--format")
@@ -18226,12 +18152,15 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         ))
         .into());
     }
-    let reads_after_summary = token_after_summary["likely_file_reads_avoided"]
+    let compared_before = token_json["compared_calls"]
         .as_u64()
-        .ok_or_else(|| io::Error::other("likely_file_reads_avoided missing after summary"))?;
-    if reads_after_summary <= likely_reads {
+        .ok_or_else(|| io::Error::other("compared_calls missing"))?;
+    let compared_after_summary = token_after_summary["compared_calls"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("compared_calls missing after summary"))?;
+    if compared_after_summary <= compared_before {
         return Err(io::Error::other(format!(
-            "summary did not increase likely file reads avoided: before {likely_reads}, after {reads_after_summary}"
+            "summary did not add a measured file comparison: before {compared_before}, after {compared_after_summary}"
         ))
         .into());
     }
@@ -18262,12 +18191,24 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         ))
         .into());
     }
-    let reads_after_search = token_after_search["likely_file_reads_avoided"]
+    let compared_after_search = token_after_search["compared_calls"]
         .as_u64()
-        .ok_or_else(|| io::Error::other("likely_file_reads_avoided missing after search"))?;
-    if reads_after_search <= reads_after_summary {
+        .ok_or_else(|| io::Error::other("compared_calls missing after search"))?;
+    if compared_after_search != compared_after_summary {
         return Err(io::Error::other(format!(
-            "search did not increase likely file reads avoided: before {reads_after_summary}, after {reads_after_search}"
+            "search claimed a file comparison without a measured counterpart: before {compared_after_summary}, after {compared_after_search}"
+        ))
+        .into());
+    }
+    let output_after_summary = token_after_summary["output_bytes"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("output_bytes missing after summary"))?;
+    let output_after_search = token_after_search["output_bytes"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("output_bytes missing after search"))?;
+    if output_after_search <= output_after_summary {
+        return Err(io::Error::other(format!(
+            "search did not add measured output bytes: before {output_after_summary}, after {output_after_search}"
         ))
         .into());
     }
@@ -18305,12 +18246,12 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         ))
         .into());
     }
-    let reads_after_slice = token_after_slice["likely_file_reads_avoided"]
+    let compared_after_slice = token_after_slice["compared_calls"]
         .as_u64()
-        .ok_or_else(|| io::Error::other("likely_file_reads_avoided missing after slice"))?;
-    if reads_after_slice <= reads_after_search {
+        .ok_or_else(|| io::Error::other("compared_calls missing after slice"))?;
+    if compared_after_slice <= compared_after_search {
         return Err(io::Error::other(format!(
-            "slice did not increase likely file reads avoided: before {reads_after_search}, after {reads_after_slice}"
+            "slice did not add a measured file comparison: before {compared_after_search}, after {compared_after_slice}"
         ))
         .into());
     }
@@ -18379,38 +18320,12 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         .assert()
         .success()
         .stdout(predicate::str::contains("ProjectAtlas"))
-        .stdout(predicate::str::contains("Token Impact"))
-        .stdout(predicate::str::contains(
-            "A V E R A G E   T O K E N S   A V O I D E D",
-        ))
-        .stdout(predicate::str::contains("Total Tokens Avoided"))
-        .stdout(predicate::str::contains("Without ProjectAtlas"))
-        .stdout(predicate::str::contains("With ProjectAtlas"))
-        .stdout(predicate::str::contains("Average avoided"))
-        .stdout(predicate::str::contains("Maximum avoided"))
-        .stdout(predicate::str::contains(
-            "N A V I G A T I O N   W O R K   A V O I D E D",
-        ))
-        .stdout(predicate::str::contains("File reads avoided"))
-        .stdout(predicate::str::contains("Observed:"))
-        .stdout(predicate::str::contains("Modeled:"))
-        .stdout(predicate::str::contains("Broad folder walks skipped").not())
-        .stdout(predicate::str::contains("Candidate files not opened").not())
-        .stdout(predicate::str::contains("source steps account for").not())
-        .stdout(predicate::str::contains("S A V I N G S"))
-        .stdout(predicate::str::contains("S I G N A L"))
-        .stdout(predicate::str::contains(
-            "W H E R E   T H E   S A V I N G S   C A M E   F R O M",
-        ))
-        .stdout(predicate::str::contains("Summaries/slices"))
-        .stdout(predicate::str::contains("Skipped folder"))
-        .stdout(predicate::str::contains("Fewer candidates"))
-        .stdout(predicate::str::contains(
-            "C A L I B R A T I O N   &   N O T E S",
-        ))
-        .stdout(predicate::str::contains("Gross tokens: without").not())
+        .stdout(predicate::str::contains("Token Telemetry"))
+        .stdout(predicate::str::contains("Excluded legacy:"))
+        .stdout(predicate::str::contains("avoided").not())
+        .stdout(predicate::str::contains("Avoided").not())
+        .stdout(predicate::str::contains("modeled").not())
         .stdout(predicate::str::contains("REQUESTED BENCHMARK EVIDENCE").not())
-        .stdout(predicate::str::contains("latest").not())
         .stdout(predicate::str::contains("Saved-token trends").not());
     Command::cargo_bin("projectatlas")?
         .env("COLUMNS", "100")
@@ -18419,7 +18334,7 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         .args(["token", "--view", "tui", "--tokenizer", "cl100k_base"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Token Impact"))
+        .stdout(predicate::str::contains("Token Telemetry"))
         .stdout(predicate::str::contains("Tokenizer audit"))
         .stdout(predicate::str::contains("cl100k_base"));
     Command::cargo_bin("projectatlas")?
@@ -18430,7 +18345,7 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         .success()
         .stdout(predicate::str::contains("ProjectAtlas Token Trends"))
         .stdout(predicate::str::contains(
-            "S A V E D   T O K E N S   T R E N D",
+            "M E A S U R E D   B Y T E S   S A V E D   T R E N D",
         ))
         .stdout(predicate::str::contains("period"))
         .stdout(predicate::str::contains("saved"));
@@ -18445,7 +18360,7 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
         .stdout(predicate::str::contains("\u{1b}["))
         .stdout(predicate::str::contains("ProjectAtlas Token Trends"))
         .stdout(predicate::str::contains(
-            "S A V E D   T O K E N S   T R E N D",
+            "M E A S U R E D   B Y T E S   S A V E D   T R E N D",
         ))
         .stdout(predicate::str::contains("48;2;246;242;232"))
         .stdout(predicate::str::contains("38;2;22;128;72"));
@@ -18462,7 +18377,8 @@ fn scan_overview_and_token_flow() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn token_cli_and_mcp_preserve_average_maximum_edge_accounting() -> Result<(), Box<dyn Error>> {
+fn token_cli_and_mcp_exclude_legacy_modeled_rows_from_reported_sizes() -> Result<(), Box<dyn Error>>
+{
     let temp = tempfile::tempdir()?;
     let repo = temp.path().join(TEST_REPO_DIR);
     let atlas_dir = repo.join(ATLAS_DIR_NAME);
@@ -18480,7 +18396,7 @@ fn token_cli_and_mcp_preserve_average_maximum_edge_accounting() -> Result<(), Bo
 
     let store = AtlasStore::open(&db)?;
     for (path, without, with) in [
-        (SRC_DIR_NAME, 5, 2),
+        (SRC_DIR_NAME, 18_000_000, 2),
         (SRC_DIR_NAME, 5, 2),
         (TESTS_DIR_NAME, 7, 3),
     ] {
@@ -18495,6 +18411,14 @@ fn token_cli_and_mcp_preserve_average_maximum_edge_accounting() -> Result<(), Bo
         event.denominator_kind = TOKEN_BASELINE_DIRECTORY_WALK.to_string();
         store.record_usage(&event)?;
     }
+    store.record_usage(&usage_from_text(
+        "public-token-edge",
+        "summary",
+        Some("src/main.rs".to_string()),
+        None,
+        "fn main() {}\n",
+        "main\n",
+    ))?;
     drop(store);
 
     let token = Command::cargo_bin("projectatlas")?
@@ -18507,76 +18431,51 @@ fn token_cli_and_mcp_preserve_average_maximum_edge_accounting() -> Result<(), Bo
         return Err(io::Error::other("edge-accounting token command failed").into());
     }
     let token_json: Value = serde_json::from_slice(&token.stdout)?;
-    require_json_i64(&token_json, &["average_modeled_tokens_avoided"], -1)?;
-    require_json_i64(&token_json, &["average_tokens_avoided"], -1)?;
-    require_json_i64(&token_json, &["maximum_tokens_avoided"], 5)?;
-    require_json_i64(&token_json, &["tokens_avoided"], -1)?;
-    require_json_usize(&token_json, &["repeated_baselines_deduped"], 1)?;
+    require_json_usize(&token_json, &["calls"], 4)?;
+    require_json_usize(&token_json, &["measured_calls"], 1)?;
+    require_json_usize(&token_json, &["excluded_unmeasured_calls"], 3)?;
+    require_json_usize(&token_json, &["output_bytes"], 5)?;
+    require_json_usize(&token_json, &["compared_source_bytes"], 13)?;
+    require_json_i64(&token_json, &["saved_bytes"], 8)?;
+    let raw = String::from_utf8(token.stdout)?;
+    for forbidden in ["18000000", "directory_walk", "policy_estimate", "modeled"] {
+        if raw.contains(forbidden) {
+            return Err(io::Error::other(format!(
+                "json token report leaked legacy value {forbidden:?}: {raw}"
+            ))
+            .into());
+        }
+    }
 
     let executable = assert_cmd::cargo::cargo_bin("projectatlas");
     let mut mcp = McpContractSession::spawn(&executable, &repo, &db)?;
     let mcp_result = (|| -> Result<(), Box<dyn Error>> {
         let report = mcp.call_tool("atlas_token_report", &json!({}))?;
         for required in [
-            "average_modeled_tokens_avoided: -1",
-            "average_tokens_avoided: -1",
-            "maximum_tokens_avoided: 5",
-            "tokens_avoided: -1",
-            "repeated_baselines_deduped: 1",
+            "unit: utf8_bytes",
+            "excluded_unmeasured_calls: 3",
+            "saved_bytes: 8",
         ] {
             if !report.contains(required) {
                 return Err(io::Error::other(format!(
-                    "MCP edge-accounting report omitted {required:?}: {report}"
+                    "MCP measured report omitted {required:?}: {report}"
                 ))
                 .into());
             }
         }
-        Ok(())
-    })();
-    complete_mcp_test_after_shutdown(mcp_result, || mcp.shutdown())?;
-
-    let store = AtlasStore::open(&db)?;
-    for index in 0..140 {
-        let mut event = usage_from_estimates(
-            "public-token-edge",
-            "search",
-            None,
-            Some(format!("overflow-{index}")),
-            10,
-            1,
-        );
-        event.provider = format!("overflow-provider-{index}");
-        store.record_usage(&event)?;
-    }
-    drop(store);
-
-    let overflow = Command::cargo_bin("projectatlas")?
-        .current_dir(&repo)
-        .args(["--format", "json", "--db"])
-        .arg(&db)
-        .arg("token")
-        .output()?;
-    if !overflow.status.success() {
-        return Err(io::Error::other("overflow token command failed").into());
-    }
-    let overflow_json: Value = serde_json::from_slice(&overflow.stdout)?;
-    require_json_string(
-        &overflow_json,
-        &["average_policy", "evidence"],
-        TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE,
-    )?;
-    if overflow_json["tokens_avoided"] != overflow_json["average_tokens_avoided"] {
-        return Err(io::Error::other("overflow token alias did not match the average").into());
-    }
-
-    let mut mcp = McpContractSession::spawn(&executable, &repo, &db)?;
-    let mcp_result = (|| -> Result<(), Box<dyn Error>> {
-        let report = mcp.call_tool("atlas_token_report", &json!({}))?;
-        if !report.contains(TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE) {
-            return Err(io::Error::other(format!(
-                "MCP overflow report omitted fallback evidence: {report}"
-            ))
-            .into());
+        for forbidden in [
+            "18000000",
+            "tokens_avoided",
+            "directory_walk",
+            "policy_estimate",
+            "modeled",
+        ] {
+            if report.contains(forbidden) {
+                return Err(io::Error::other(format!(
+                    "MCP report leaked legacy value {forbidden:?}: {report}"
+                ))
+                .into());
+            }
         }
         Ok(())
     })();
@@ -19012,13 +18911,13 @@ fn mcp_server_stays_bound_to_one_project_database() -> Result<(), Box<dyn Error>
         );
     }
     if !output_a.contains("token_savings:")
-        || !output_a.contains("estimate_kind: heuristic")
+        || !output_a.contains("unit: utf8_bytes")
         || !output_a.contains("detail_availability: retained")
-        || !output_a.contains("read_avoidance:")
-        || !output_a.contains("likely_file_reads_avoided")
+        || !output_a.contains("full_file_comparison:")
+        || output_a.contains("likely_file_reads_avoided")
     {
         return Err(io::Error::other(format!(
-            "repo A MCP token report did not include heuristic read-avoidance telemetry: {output_a}"
+            "repo A MCP token report did not include measured byte telemetry: {output_a}"
         ))
         .into());
     }
@@ -19500,7 +19399,7 @@ fn agent_efficiency_cli_mcp_contract_is_typed_read_only_and_isolated() -> Result
     drop(connection);
     let unavailable = token_overview_json(&repo, &database, None)?;
     require_json_string(&unavailable, &["agent_efficiency", "state"], "unavailable")?;
-    require_json_string(&unavailable, &["estimate_kind"], "heuristic")?;
+    require_json_string(&unavailable, &["unit"], TOKEN_REPORT_UNIT)?;
     let database_before = fs::read(&database)?;
     let sidecars_before = ["-wal", "-shm", "-journal"].map(|suffix| {
         let path = sqlite_sidecar_path(&database, suffix);
@@ -19825,7 +19724,7 @@ fn large_repository_agent_funnel_stays_bounded() -> Result<(), Box<dyn Error>> {
     }
     let token_json: Value = serde_json::from_slice(&raw_token.stdout)?;
     require_json_usize_at_least(&token_json, &["calls"], 3)?;
-    require_json_i64_greater_than(&token_json, &["estimated_saved"], 0)?;
+    require_json_usize_greater_than(&token_json, &["output_bytes"], 0)?;
     Ok(())
 }
 
@@ -21933,17 +21832,13 @@ fn mcp_stdio_serves_toon_tool_payloads() -> Result<(), Box<dyn Error>> {
         || !stdout.contains("output_bytes:")
         || !stdout.contains("next_start_index: 1")
         || !stdout.contains("ProjectAtlas")
-        || !stdout.contains("Token Impact")
-        || !stdout.contains("A V E R A G E   T O K E N S   A V O I D E D")
-        || !stdout.contains("Total Tokens Avoided")
-        || !stdout.contains("Average avoided")
-        || !stdout.contains("Maximum avoided")
-        || !stdout.contains("N A V I G A T I O N   W O R K   A V O I D E D")
-        || !stdout.to_ascii_lowercase().contains("file reads avoided")
-        || stdout.contains("Broad folder walks skipped")
-        || stdout.contains("Candidate files not opened")
-        || stdout.contains("source steps account for")
-        || !stdout.contains("S I G N A L")
+        || !stdout.contains("Token Telemetry")
+        || !stdout.contains("M E A S U R E D   B Y T E S   S A V E D")
+        || !stdout.contains("A T L A S   O U T P U T")
+        || !stdout.contains("M E A S U R E D   C A L L S")
+        || stdout.contains("Average avoided")
+        || stdout.contains("Maximum avoided")
+        || stdout.to_ascii_lowercase().contains("file reads avoided")
         || !stdout.contains("purpose_review:")
         || !stdout.contains("failed: 0")
         || !stdout.contains("src/lib.rs")
@@ -28047,7 +27942,7 @@ fn full_repository_intelligence_flow_indexes_database_and_commands() -> Result<(
         .arg("token")
         .assert()
         .success()
-        .stdout(predicate::str::contains("estimated_saved"));
+        .stdout(predicate::str::contains("output_bytes"));
 
     Command::cargo_bin("projectatlas")?
         .current_dir(&repo)
@@ -34360,43 +34255,23 @@ fn assert_mcp_typed_payload(
             require_json_usize(decoded, &["lint", "exit_code"], 0)?;
         }
         "atlas_token_report" => {
-            require_json_string(decoded, &["token_savings", "estimate_kind"], "heuristic")?;
+            require_json_string(decoded, &["token_savings", "unit"], TOKEN_REPORT_UNIT)?;
             require_json_usize_at_least(decoded, &["token_savings", "calls"], 1)?;
-            let tokens_avoided = json_at(decoded, &["token_savings", "tokens_avoided"])?
-                .as_i64()
-                .ok_or_else(|| {
-                    io::Error::other("token_savings.tokens_avoided was not an integer")
-                })?;
-            let average_tokens = json_at(decoded, &["token_savings", "average_tokens_avoided"])?
-                .as_i64()
-                .ok_or_else(|| {
-                    io::Error::other("token_savings.average_tokens_avoided was not an integer")
-                })?;
-            json_at(decoded, &["token_savings", "maximum_tokens_avoided"])?
-                .as_i64()
-                .ok_or_else(|| {
-                    io::Error::other("token_savings.maximum_tokens_avoided was not an integer")
-                })?;
-            if tokens_avoided != average_tokens {
-                return Err(io::Error::other(
-                    "MCP token compatibility alias did not match the average",
+            json_at(
+                decoded,
+                &["token_savings", "full_file_comparison", "saved_bytes"],
+            )?
+            .as_i64()
+            .ok_or_else(|| {
+                io::Error::other(
+                    "token_savings.full_file_comparison.saved_bytes was not an integer",
                 )
-                .into());
+            })?;
+            if json_at(decoded, &["token_savings", "tokens_avoided"]).is_ok() {
+                return Err(
+                    io::Error::other("MCP token report still exposes tokens_avoided").into(),
+                );
             }
-            require_json_usize(
-                decoded,
-                &[
-                    "token_savings",
-                    "average_policy",
-                    "directory_walk_baseline_percent",
-                ],
-                50,
-            )?;
-            require_json_string(
-                decoded,
-                &["token_savings", "average_policy", "evidence"],
-                "fixed_policy_estimate_not_benchmark_or_provider_measurement",
-            )?;
         }
         "atlas_parity_report" => {
             require_json_string(decoded, &["parity", "profile"], "repository-intelligence")?;
@@ -36240,26 +36115,6 @@ fn require_json_i64(value: &Value, path: &[&str], expected: i64) -> Result<(), B
     } else {
         Err(io::Error::other(format!(
             "expected {path:?} to equal {expected}, found {actual}"
-        ))
-        .into())
-    }
-}
-
-/// Require a nested signed JSON integer value to be greater than a threshold.
-fn require_json_i64_greater_than(
-    value: &Value,
-    path: &[&str],
-    threshold: i64,
-) -> Result<(), Box<dyn Error>> {
-    let current = json_at(value, path)?;
-    let actual = current
-        .as_i64()
-        .ok_or_else(|| io::Error::other(format!("expected signed integer at {path:?}")))?;
-    if actual > threshold {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "expected {path:?} to be greater than {threshold}, found {actual}"
         ))
         .into())
     }

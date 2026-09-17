@@ -3,10 +3,9 @@
 use crate::{DbError, DbResult};
 use projectatlas_core::graph::ProjectInstanceId;
 use projectatlas_core::telemetry::{
-    TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE, TOKEN_BASELINE_DIRECTORY_WALK, TokenAccountingTotals,
-    TokenBucketOverview, TokenOverview, TokenTrendPeriod, TokenTrendReport, TokenTrendWindow,
-    UsageDetailAvailability, UsageEvent, UsageInstanceId, UsageInstanceOwner,
-    average_modeled_baseline_tokens,
+    TOKEN_BASELINE_DIRECTORY_WALK, TokenBucketOverview, TokenOverview, TokenTrendPeriod,
+    TokenTrendReport, TokenTrendWindow, UsageDetailAvailability, UsageEvent, UsageInstanceId,
+    UsageInstanceOwner,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -2008,12 +2007,7 @@ pub(crate) fn repository_token_overview(connection: &Connection) -> DbResult<Tok
     let worktree_aggregates = load_worktree_overview_aggregates(connection, None, true)?;
     let has_worktree_aggregates = worktree_aggregates_exist(connection)?;
     aggregates.extend(worktree_aggregates);
-    let (buckets, totals, average_policy_complete) = aggregate_report_rows(aggregates)?;
-    let mut overview = TokenOverview::from_buckets(buckets);
-    overview.apply_accounting_totals(totals);
-    if !average_policy_complete {
-        overview.average_policy.evidence = TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE.to_string();
-    }
+    let mut overview = TokenOverview::from_buckets(aggregate_report_rows(aggregates)?);
     let native_detail = detail_availability(connection, project, None)?;
     overview.set_detail_availability(if has_worktree_aggregates {
         UsageDetailAvailability::Partial
@@ -2029,12 +2023,7 @@ pub(crate) fn worktree_token_overview(
     registration_id: i64,
 ) -> DbResult<TokenOverview> {
     let aggregates = load_worktree_overview_aggregates(connection, Some(registration_id), false)?;
-    let (buckets, totals, average_policy_complete) = aggregate_report_rows(aggregates)?;
-    let mut overview = TokenOverview::from_buckets(buckets);
-    overview.apply_accounting_totals(totals);
-    if !average_policy_complete {
-        overview.average_policy.evidence = TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE.to_string();
-    }
+    let mut overview = TokenOverview::from_buckets(aggregate_report_rows(aggregates)?);
     overview.set_detail_availability(UsageDetailAvailability::Partial);
     Ok(overview)
 }
@@ -2047,12 +2036,7 @@ fn token_overview_for_project(
 ) -> DbResult<TokenOverview> {
     crate::project_identity::require_bound_project_identity(connection, project)?;
     let aggregates = load_overview_aggregates(connection, project, caller_label)?;
-    let (buckets, totals, average_policy_complete) = aggregate_report_rows(aggregates)?;
-    let mut overview = TokenOverview::from_buckets(buckets);
-    overview.apply_accounting_totals(totals);
-    if !average_policy_complete {
-        overview.average_policy.evidence = TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE.to_string();
-    }
+    let mut overview = TokenOverview::from_buckets(aggregate_report_rows(aggregates)?);
     overview.set_detail_availability(detail_availability(connection, project, caller_label)?);
     Ok(overview)
 }
@@ -4610,131 +4594,22 @@ fn worktree_aggregates_exist(connection: &Connection) -> DbResult<bool> {
         .map_err(DbError::from)
 }
 
-/// Combine normalized aggregate rows into one overview and bounded buckets.
+/// Combine normalized aggregate rows into bounded bucket rows.
+///
+/// Measured-only filtering happens in [`TokenOverview::from_buckets`]; legacy
+/// modeled counters stay persisted but never contribute reported sizes.
 fn aggregate_report_rows(
     rows: Vec<(DimensionValues, AggregateCounters)>,
-) -> DbResult<(Vec<TokenBucketOverview>, TokenAccountingTotals, bool)> {
+) -> DbResult<Vec<TokenBucketOverview>> {
     let mut by_dimension = BTreeMap::<DimensionValues, AggregateCounters>::new();
     for (dimension, counters) in rows {
         let entry = by_dimension.entry(dimension).or_default();
         *entry = entry.checked_add(counters)?;
     }
-    let mut totals = TokenAccountingTotals::default();
-    let mut buckets = Vec::with_capacity(by_dimension.len());
-    let mut average_directory_without = 0u128;
-    let mut average_directory_with = 0u128;
-    let mut average_policy_complete = true;
-    for (dimension, counters) in by_dimension {
-        if dimension.overflow
-            && dimension.denominator_kind == OVERFLOW_DIMENSION
-            && counters.modeled_without > 0
-        {
-            average_policy_complete = false;
-        }
-        totals.measured_tokens_saved = totals
-            .measured_tokens_saved
-            .checked_add(component_difference(
-                counters.observed_without,
-                counters.observed_with,
-            ))
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "measured_tokens_saved",
-            })?;
-        totals.gross_modeled_tokens_avoided = totals
-            .gross_modeled_tokens_avoided
-            .checked_add(component_difference(
-                counters.modeled_without,
-                counters.modeled_with,
-            ))
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "gross_modeled_tokens_avoided",
-            })?;
-        let deduped_modeled_delta = component_difference(
-            counters.deduped_modeled_without,
-            counters.deduped_modeled_with,
-        );
-        totals.deduped_modeled_tokens_avoided = totals
-            .deduped_modeled_tokens_avoided
-            .checked_add(deduped_modeled_delta)
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "deduped_modeled_tokens_avoided",
-            })?;
-        if dimension.denominator_kind == TOKEN_BASELINE_DIRECTORY_WALK {
-            let emitted_with = count_u128("modeled_with", counters.modeled_with)?;
-            let retained_without = if deduped_modeled_delta >= 0 {
-                emitted_with.checked_add(deduped_modeled_delta.unsigned_abs())
-            } else {
-                emitted_with.checked_sub(deduped_modeled_delta.unsigned_abs())
-            }
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "average_directory_without",
-            })?;
-            average_directory_without = average_directory_without
-                .checked_add(retained_without)
-                .ok_or(DbError::TelemetryIntegerOverflow {
-                    field: "average_directory_without",
-                })?;
-            average_directory_with = average_directory_with.checked_add(emitted_with).ok_or(
-                DbError::TelemetryIntegerOverflow {
-                    field: "average_directory_with",
-                },
-            )?;
-        } else {
-            totals.average_modeled_tokens_avoided = totals
-                .average_modeled_tokens_avoided
-                .checked_add(deduped_modeled_delta)
-                .ok_or(DbError::TelemetryIntegerOverflow {
-                    field: "average_modeled_tokens_avoided",
-                })?;
-        }
-        totals.repeated_baselines_deduped = totals
-            .repeated_baselines_deduped
-            .checked_add(count_u128(
-                "repeated_baselines",
-                counters.repeated_baselines,
-            )?)
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "repeated_baselines",
-            })?;
-        totals.observed_file_read_replacements = totals
-            .observed_file_read_replacements
-            .checked_add(count_u128(
-                "observed_file_read_replacements",
-                counters.observed_file_read_replacements,
-            )?)
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "observed_file_read_replacements",
-            })?;
-        totals.modeled_file_reads_avoided = totals
-            .modeled_file_reads_avoided
-            .checked_add(count_u128(
-                "modeled_file_reads_avoided",
-                counters.modeled_file_reads_avoided,
-            )?)
-            .ok_or(DbError::TelemetryIntegerOverflow {
-                field: "modeled_file_reads_avoided",
-            })?;
-        buckets.push(bucket_from_counters(dimension, counters)?);
-    }
-    let average_directory_without =
-        average_modeled_baseline_tokens(TOKEN_BASELINE_DIRECTORY_WALK, average_directory_without);
-    let average_directory_delta = i128::try_from(average_directory_without)
-        .ok()
-        .and_then(|without| {
-            i128::try_from(average_directory_with)
-                .ok()
-                .and_then(|with| without.checked_sub(with))
-        })
-        .ok_or(DbError::TelemetryIntegerOverflow {
-            field: "average_modeled_tokens_avoided",
-        })?;
-    totals.average_modeled_tokens_avoided = totals
-        .average_modeled_tokens_avoided
-        .checked_add(average_directory_delta)
-        .ok_or(DbError::TelemetryIntegerOverflow {
-            field: "average_modeled_tokens_avoided",
-        })?;
-    Ok((buckets, totals, average_policy_complete))
+    by_dimension
+        .into_iter()
+        .map(|(dimension, counters)| bucket_from_counters(dimension, counters))
+        .collect()
 }
 
 /// Convert one normalized counter row into the public bucket contract.
@@ -5058,11 +4933,6 @@ fn signed_components(value: i64) -> DbResult<(i64, i64)> {
     }
 }
 
-/// Reconstruct a signed aggregate from its nonnegative components.
-fn component_difference(without: i64, with: i64) -> i128 {
-    i128::from(without) - i128::from(with)
-}
-
 /// Add an unsigned count to a persisted `SQLite` integer exactly.
 fn checked_count_add(field: &'static str, previous: i64, value: usize) -> DbResult<i64> {
     previous
@@ -5222,8 +5092,7 @@ mod tests {
     use super::*;
     use crate::{AtlasStore, WorktreeAlias, WorktreeRegistrationState};
     use projectatlas_core::telemetry::{
-        TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_DEDUPE_SCOPE_EVENT, usage_from_estimates,
-        usage_from_text,
+        TOKEN_BASELINE_DIRECTORY_WALK, usage_from_estimates, usage_from_output, usage_from_text,
     };
     use projectatlas_core::{Node, NodeKind, normalized_parent};
     use rusqlite::{Transaction, TransactionBehavior};
@@ -5430,6 +5299,59 @@ mod tests {
         }
     }
 
+    /// Return persisted legacy modeled storage counters (deduped delta, repeated baselines).
+    ///
+    /// Reports exclude these counters; storage must still keep them exact for
+    /// compatibility with released databases.
+    fn stored_modeled_counters(
+        connection: &Connection,
+        project: ProjectInstanceId,
+        label: Option<&str>,
+    ) -> Result<(i128, i64), Box<dyn Error>> {
+        let map = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        };
+        let (without, with, repeated) = if let Some(label) = label {
+            connection.query_row(
+                "SELECT COALESCE(SUM(a.deduped_modeled_without), 0),
+                        COALESCE(SUM(a.deduped_modeled_with), 0),
+                        COALESCE(SUM(a.repeated_baselines), 0)
+                 FROM usage_instance_aggregates AS a
+                 JOIN usage_instances AS i USING(instance_row_id)
+                 WHERE i.project_instance_id = ?1 AND i.caller_label = ?2",
+                params![project.as_bytes().as_slice(), label],
+                map,
+            )?
+        } else {
+            connection.query_row(
+                "SELECT COALESCE(SUM(deduped_modeled_without), 0),
+                        COALESCE(SUM(deduped_modeled_with), 0),
+                        COALESCE(SUM(repeated_baselines), 0)
+                 FROM usage_global_aggregates
+                 WHERE project_instance_id = ?1",
+                [project.as_bytes().as_slice()],
+                map,
+            )?
+        };
+        Ok((i128::from(without) - i128::from(with), repeated))
+    }
+
+    /// Assert that a report exposes no size derived from unmeasured legacy rows.
+    fn require_no_reported_sizes(overview: &TokenOverview) -> Result<(), Box<dyn Error>> {
+        require_eq(&overview.measured_calls, &0, "measured calls")?;
+        require_eq(&overview.output_bytes, &0, "output bytes")?;
+        require_eq(&overview.saved_bytes, &0, "saved bytes")?;
+        require_eq(&overview.savings_rate, &None, "savings rate")?;
+        require(
+            overview.buckets.is_empty(),
+            "legacy buckets must be excluded",
+        )
+    }
+
     fn scalar_count(connection: &Connection, sql: &str) -> Result<usize, Box<dyn Error>> {
         let value = connection.query_row(sql, [], |row| row.get::<_, i64>(0))?;
         Ok(usize::try_from(value)?)
@@ -5597,8 +5519,12 @@ mod tests {
             let overview =
                 token_overview_for_project(&database.connection, database.project, Some("agent"))?;
             assert_eq!(overview.calls, 3);
-            assert_eq!(overview.deduped_modeled_tokens_avoided, 25);
-            assert_eq!(overview.repeated_baselines_deduped, 1);
+            assert_eq!(overview.excluded_unmeasured_calls, 3);
+            require_no_reported_sizes(&overview)?;
+            assert_eq!(
+                stored_modeled_counters(&database.connection, database.project, Some("agent"))?,
+                (25, 1)
+            );
             assert_eq!(
                 overview.detail_availability,
                 UsageDetailAvailability::Retained
@@ -5648,10 +5574,10 @@ mod tests {
             crate::schema::initialize(&reopened, None)?;
             let reopened_overview =
                 token_overview_for_project(&reopened, database.project, Some("agent"))?;
-            assert_eq!(reopened_overview.calls, overview.calls);
+            assert_eq!(reopened_overview, overview);
             assert_eq!(
-                reopened_overview.deduped_modeled_tokens_avoided,
-                overview.deduped_modeled_tokens_avoided
+                stored_modeled_counters(&reopened, database.project, Some("agent"))?,
+                (25, 1)
             );
             Ok(())
         })();
@@ -5659,7 +5585,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_average_and_maximum_match_raw_event_accounting() {
+    fn sqlite_report_matches_raw_measured_accounting_and_ignores_legacy_rows() {
         let result = (|| -> Result<(), Box<dyn Error>> {
             let database = test_database()?;
             let policy = TelemetryRetentionPolicy::default();
@@ -5679,6 +5605,7 @@ mod tests {
                     "abcdabcd",
                     "ab",
                 ),
+                usage_from_output("agent", "search", None, Some("needle".to_string()), "hit"),
             ];
             let expected = TokenOverview::from_events(&events);
 
@@ -5700,7 +5627,12 @@ mod tests {
                 policy,
                 true,
             )?;
-            for (identity, event) in [(22, &events[2]), (23, &events[3]), (24, &events[4])] {
+            for (identity, event) in [
+                (22, &events[2]),
+                (23, &events[3]),
+                (24, &events[4]),
+                (25, &events[5]),
+            ] {
                 record_transaction(
                     &database.connection,
                     database.project,
@@ -5714,37 +5646,24 @@ mod tests {
 
             let actual =
                 token_overview_for_project(&database.connection, database.project, Some("agent"))?;
-            assert_eq!(actual.average_modeled_tokens_avoided, 82);
-            assert_eq!(actual.average_tokens_avoided, 83);
-            assert_eq!(actual.maximum_tokens_avoided, 136);
-            assert_eq!(actual.tokens_avoided, actual.average_tokens_avoided);
-            assert_eq!(
-                actual.average_modeled_tokens_avoided,
-                expected.average_modeled_tokens_avoided
-            );
-            assert_eq!(
-                actual.average_tokens_avoided,
-                expected.average_tokens_avoided
-            );
-            assert_eq!(
-                actual.maximum_tokens_avoided,
-                expected.maximum_tokens_avoided
-            );
-            assert_eq!(
-                actual.deduped_modeled_tokens_avoided,
-                expected.deduped_modeled_tokens_avoided
-            );
-            assert_eq!(actual.buckets, expected.buckets);
+            assert_eq!(actual.calls, 6);
+            assert_eq!(actual.measured_calls, 2);
+            assert_eq!(actual.excluded_unmeasured_calls, 4);
+            assert_eq!(actual.output_bytes, 5);
+            assert_eq!(actual.compared_calls, 1);
+            assert_eq!(actual.compared_source_bytes, 8);
+            assert_eq!(actual.saved_bytes, 6);
+            assert_eq!(actual, expected);
             Ok(())
         })();
         assert!(
             result.is_ok(),
-            "SQLite average/maximum parity test failed: {result:?}"
+            "SQLite measured parity test failed: {result:?}"
         );
     }
 
     #[test]
-    fn directory_overflow_retains_average_policy_and_raw_parity() {
+    fn directory_overflow_rows_stay_excluded_from_reported_sizes() {
         let result = (|| -> Result<(), Box<dyn Error>> {
             let database = test_database()?;
             let policy = TelemetryRetentionPolicy {
@@ -5753,7 +5672,6 @@ mod tests {
             };
             let selected = event("overflow-average", 100, 10);
             let folder = directory_event("overflow-average", 101, 20);
-            let expected = TokenOverview::from_events(&[selected.clone(), folder.clone()]);
 
             record_transaction(
                 &database.connection,
@@ -5779,16 +5697,8 @@ mod tests {
                 database.project,
                 Some("overflow-average"),
             )?;
-            assert_eq!(actual.average_tokens_avoided, 120);
-            assert_eq!(actual.maximum_tokens_avoided, 171);
-            assert_eq!(
-                actual.average_tokens_avoided,
-                expected.average_tokens_avoided
-            );
-            assert_eq!(
-                actual.maximum_tokens_avoided,
-                expected.maximum_tokens_avoided
-            );
+            assert_eq!(actual.calls, 2);
+            require_no_reported_sizes(&actual)?;
             assert_eq!(actual.detail_availability, UsageDetailAvailability::Partial);
             assert_eq!(
                 scalar_count(
@@ -5801,24 +5711,25 @@ mod tests {
         })();
         assert!(
             result.is_ok(),
-            "directory overflow average-policy test failed: {result:?}"
+            "directory overflow exclusion test failed: {result:?}"
         );
     }
 
     #[test]
-    fn sqlite_and_raw_accounting_narrow_once_at_signed_bounds() {
+    fn sqlite_and_raw_measured_accounting_narrow_once_at_signed_bounds() {
         let result = (|| -> Result<(), Box<dyn Error>> {
             let database = test_database()?;
             let policy = TelemetryRetentionPolicy::default();
             let bound = isize::MAX as usize;
-            let mut events = vec![
-                event("wide", bound, 0),
-                event("wide", bound, 0),
-                event("wide", 0, bound),
-            ];
-            for (index, event) in events.iter_mut().enumerate() {
-                event.provider = format!("wide-{index}");
-                event.dedupe_scope = TOKEN_DEDUPE_SCOPE_EVENT.to_string();
+            let mut events = Vec::new();
+            for (index, (without, with)) in
+                [(bound, 0), (bound, 0), (0, bound)].into_iter().enumerate()
+            {
+                let mut measured = usage_from_text("wide", "summary", None, None, "", "");
+                measured.estimated_tokens_without_projectatlas = Some(without);
+                measured.estimated_tokens_with_projectatlas = Some(with);
+                measured.provider = format!("measured-{index}");
+                events.push(measured);
             }
             let expected = TokenOverview::from_events(&events);
 
@@ -5836,19 +5747,9 @@ mod tests {
 
             let actual =
                 token_overview_for_project(&database.connection, database.project, Some("wide"))?;
-            assert_eq!(expected.average_tokens_avoided, isize::MAX);
-            assert_eq!(
-                actual.average_tokens_avoided,
-                expected.average_tokens_avoided
-            );
-            assert_eq!(
-                actual.maximum_tokens_avoided,
-                expected.maximum_tokens_avoided
-            );
-            assert_eq!(
-                actual.deduped_modeled_tokens_avoided,
-                expected.deduped_modeled_tokens_avoided
-            );
+            assert_eq!(expected.saved_bytes, isize::MAX);
+            assert_eq!(actual.saved_bytes, expected.saved_bytes);
+            assert_eq!(actual.compared_source_bytes, expected.compared_source_bytes);
             Ok(())
         })();
         assert!(
@@ -5905,7 +5806,11 @@ mod tests {
             assert_eq!(state.spill_cleanup, SpillCleanupState::NotApplicable);
             let global = token_overview_for_project(&database.connection, database.project, None)?;
             assert_eq!(global.calls, 3);
-            assert_eq!(global.deduped_modeled_tokens_avoided, 130);
+            require_no_reported_sizes(&global)?;
+            assert_eq!(
+                stored_modeled_counters(&database.connection, database.project, None)?.0,
+                130
+            );
             let expired =
                 token_overview_for_project(&database.connection, database.project, Some("first"))?;
             assert_eq!(
@@ -5988,7 +5893,11 @@ mod tests {
             let aged_overview =
                 token_overview_for_project(&aged.connection, aged.project, Some("aged"))?;
             assert_eq!(aged_overview.calls, 2);
-            assert_eq!(aged_overview.deduped_modeled_tokens_avoided, 80);
+            require_no_reported_sizes(&aged_overview)?;
+            assert_eq!(
+                stored_modeled_counters(&aged.connection, aged.project, Some("aged"))?.0,
+                80
+            );
             assert_eq!(
                 aged_overview.detail_availability,
                 UsageDetailAvailability::Partial
@@ -6035,7 +5944,16 @@ mod tests {
                 Some("bytes"),
             )?;
             assert_eq!(byte_overview.calls, 2);
-            assert_eq!(byte_overview.deduped_modeled_tokens_avoided, 80);
+            require_no_reported_sizes(&byte_overview)?;
+            assert_eq!(
+                stored_modeled_counters(
+                    &byte_bounded.connection,
+                    byte_bounded.project,
+                    Some("bytes")
+                )?
+                .0,
+                80
+            );
             Ok(())
         })();
         assert!(
@@ -6287,7 +6205,8 @@ mod tests {
                 Some("grouped"),
             )?;
             assert_eq!(overview.calls, 48);
-            assert_eq!(overview.buckets.len(), 1);
+            assert_eq!(overview.excluded_unmeasured_calls, 48);
+            assert!(overview.buckets.is_empty());
             let trends = token_trends_for_project(
                 &database.connection,
                 database.project,
@@ -6296,7 +6215,7 @@ mod tests {
             )?;
             assert_eq!(trends.periods.len(), 1);
             assert_eq!(trends.periods[0].calls, 48);
-            assert_eq!(trends.periods[0].buckets.len(), 1);
+            assert!(trends.periods[0].buckets.is_empty());
             Ok(())
         })();
         assert!(
@@ -6533,10 +6452,7 @@ mod tests {
                 overview.detail_availability,
                 UsageDetailAvailability::Partial
             );
-            assert_eq!(
-                overview.average_policy.evidence,
-                TOKEN_AVERAGE_POLICY_OVERFLOW_EVIDENCE
-            );
+            require_no_reported_sizes(&overview)?;
             Ok(())
         })();
         assert!(

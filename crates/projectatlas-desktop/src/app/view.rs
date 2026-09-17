@@ -173,9 +173,9 @@ fn bucket_view(bucket: &TokenBucketOverview) -> BucketView {
         confidence: bucket.confidence.clone(),
         accounting_layer: bucket.accounting_layer.clone(),
         calls: bucket.calls,
-        without: bucket.estimated_without_projectatlas,
-        with: bucket.estimated_with_projectatlas,
-        saved: bucket.estimated_saved,
+        without: bucket.source_bytes,
+        with: bucket.output_bytes,
+        saved: bucket.saved_bytes.unwrap_or(0),
         savings_rate: bucket.savings_rate,
     }
 }
@@ -187,23 +187,25 @@ impl OverviewView {
         buckets.sort_by(|left, right| right.saved.cmp(&left.saved));
         buckets.truncate(MAX_BUCKETS);
         Self {
-            estimate_kind: overview.estimate_kind.clone(),
-            estimator: overview.estimator.clone(),
-            estimate_scope: overview.estimate_scope.clone(),
+            // The IPC shape stays stable for the frontend, but every value is a
+            // measured UTF-8 byte figure; modeled components are always zero.
+            estimate_kind: "measured".to_string(),
+            estimator: overview.unit.clone(),
+            estimate_scope: overview.measurement.clone(),
             calls: overview.calls,
-            without: overview.estimated_without_projectatlas,
-            with: overview.estimated_with_projectatlas,
-            saved: overview.estimated_saved,
+            without: overview.compared_source_bytes,
+            with: overview.compared_output_bytes,
+            saved: overview.saved_bytes,
             savings_rate: overview.savings_rate,
-            measured_tokens_saved: overview.measured_tokens_saved,
-            deduped_modeled_tokens_avoided: overview.deduped_modeled_tokens_avoided,
-            average_tokens_avoided: overview.average_tokens_avoided,
-            maximum_tokens_avoided: overview.maximum_tokens_avoided,
-            observed_file_read_replacements: overview.observed_file_read_replacements,
-            modeled_file_reads_avoided: overview.modeled_file_reads_avoided,
-            likely_file_reads_avoided: overview.likely_file_reads_avoided,
-            read_avoidance_scope: overview.read_avoidance_scope.clone(),
-            read_avoidance_confidence: overview.read_avoidance_confidence.clone(),
+            measured_tokens_saved: overview.saved_bytes,
+            deduped_modeled_tokens_avoided: 0,
+            average_tokens_avoided: overview.saved_bytes,
+            maximum_tokens_avoided: overview.saved_bytes,
+            observed_file_read_replacements: overview.compared_calls,
+            modeled_file_reads_avoided: 0,
+            likely_file_reads_avoided: overview.compared_calls,
+            read_avoidance_scope: overview.savings_basis.clone(),
+            read_avoidance_confidence: "observed".to_string(),
             buckets,
             calibration: overview
                 .calibration
@@ -230,9 +232,9 @@ impl TrendView {
                 .map(|period| PeriodView {
                     period: period.period.clone(),
                     calls: period.calls,
-                    without: period.estimated_without_projectatlas,
-                    with: period.estimated_with_projectatlas,
-                    saved: period.estimated_saved,
+                    without: period.compared_source_bytes,
+                    with: period.compared_output_bytes,
+                    saved: period.saved_bytes,
                     savings_rate: period.savings_rate,
                 })
                 .collect(),
