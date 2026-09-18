@@ -16,7 +16,9 @@ Stand: 17.09.2026
 - Release-Repo `einzigTimo/projectatlas-desktop-releases` hat noch keinen einzigen Release.
 - **Token-Report nur mit Messwerten** (Timo, 17.09.2026): hochgerechnete Ersparnis („directory_walk“,
   „modeled_avoidance“) raus, nur echt gemessene Werte zeigen. Dazu die Diagnose, ob Atlas falsch gebaut
-  ist oder falsch genutzt wird. Läuft in eigenem Worktree.
+  ist oder falsch genutzt wird. Gebaut in Worktree `atlas-token-messwerte`, nicht committet. Diagnose:
+  überwiegend Bau (unfokussierte Ausgaben). Offen: e2e 4 Installer-Tests rot (gegen main ungeprüft),
+  openspec `token-impact-estimate-reporting`, Frontend-Beschriftung „Tokens“, README-Aussage „über 90 %“.
 
 ## Zuletzt erledigt
 
