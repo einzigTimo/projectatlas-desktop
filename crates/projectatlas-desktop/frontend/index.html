@@ -57,18 +57,18 @@
           <div class="overview-main">
             <div class="header-row">
               <div class="brand">ProjectAtlas Desktop
-                <span class="sub">Token-Ersparnis-Übersicht</span>
+                <span class="sub">Gemessene Telemetrie (Bytes)</span>
               </div>
               <div class="kv">
                 <div><span class="k">Sitzung: </span><span class="v">alle</span></div>
                 <div><span class="k">Abfragen: </span><span class="v num" id="hdrCalls">–</span></div>
-                <div><span class="k">Schätzung: </span><span class="v" id="hdrEstimate">–</span></div>
+                <div><span class="k">Einheit: </span><span class="v" id="hdrEstimate">–</span></div>
               </div>
             </div>
 
             <div class="panel">
               <div class="panel-body">
-                <div class="hero-title uc">Insgesamt gesparte Tokens</div>
+                <div class="hero-title uc">Gemessen gesparte Bytes</div>
                 <div class="hero-value num" id="heroValue"><span id="heroNumber">–</span><span class="check" id="heroCheck"></span></div>
                 <div class="hero-sub" id="heroSub">noch keine Daten</div>
                 <div class="hero-hint" id="heroHint" hidden></div>
@@ -77,39 +77,20 @@
                 <div class="equation">
                   <div class="eq-col">
                     <div class="n num" id="eqWithout" style="color:var(--blue)">–</div>
-                    <div class="l">Ohne ProjectAtlas</div>
+                    <div class="l">Geladene Dateien (Bytes)</div>
                     <div class="bar"><i id="eqWithoutBar" style="width:0;background:var(--blue)"></i></div>
                   </div>
                   <div class="eq-op">&minus;</div>
                   <div class="eq-col">
                     <div class="n num" id="eqWith" style="color:var(--ink)">–</div>
-                    <div class="l">Mit ProjectAtlas</div>
+                    <div class="l">Ausgabe (Bytes)</div>
                     <div class="bar"><i id="eqWithBar" style="width:0;background:var(--ink)"></i></div>
                   </div>
                   <div class="eq-op">=</div>
                   <div class="eq-col">
                     <div class="n num" id="eqSaved" style="color:var(--green)">–</div>
-                    <div class="l">Gespart</div>
+                    <div class="l">Gespart (Bytes)</div>
                     <div class="bar"><i id="eqSavedBar" style="width:0;background:var(--green)"></i></div>
-                  </div>
-                </div>
-                <div class="equation">
-                  <div class="eq-col">
-                    <div class="n num" id="eqMeasured" style="color:var(--green)">–</div>
-                    <div class="l">beobachtet gemessen</div>
-                    <div class="bar"><i id="eqMeasuredBar" style="width:0;background:var(--green)"></i></div>
-                  </div>
-                  <div class="eq-op">+</div>
-                  <div class="eq-col">
-                    <div class="n num" id="eqModeled" style="color:var(--purple)">–</div>
-                    <div class="l">modelliert vermieden</div>
-                    <div class="bar"><i id="eqModeledBar" style="width:0;background:var(--purple)"></i></div>
-                  </div>
-                  <div class="eq-op">&le;</div>
-                  <div class="eq-col">
-                    <div class="n num" id="eqMaximum" style="color:var(--yellow)">–</div>
-                    <div class="l">Maximum</div>
-                    <div class="bar"><i id="eqMaximumBar" style="width:0;background:var(--yellow)"></i></div>
                   </div>
                 </div>
               </div>
@@ -117,11 +98,9 @@
 
             <div class="panel">
               <div class="panel-body">
-                <div class="nav-strip-label uc">Vermiedene Navigation</div>
+                <div class="nav-strip-label uc">Gemessene Dateivergleiche</div>
                 <div class="nav-strip">
-                  <div class="item"><div class="n num" id="navReads">–</div><div class="l">Dateilesungen vermieden</div></div>
-                  <div class="item"><div class="n num" id="navObserved">–</div><div class="l">beobachtet</div></div>
-                  <div class="item"><div class="n num" id="navModeled">–</div><div class="l">modelliert</div></div>
+                  <div class="item"><div class="n num" id="navReads">–</div><div class="l">Aufrufe mit geladener Datei</div></div>
                   <div class="item"><div class="n num" id="navRate">–</div><div class="l">Sparquote</div></div>
                 </div>
               </div>
@@ -155,7 +134,7 @@
               <div class="panel-title"><span class="uc">Woher die Ersparnis kommt</span></div>
               <div class="panel-body" style="padding-top:8px;">
                 <table class="breakdown">
-                  <thead><tr><th>Anbieter / Modell</th><th>Baseline</th><th class="num">Aufrufe</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+                  <thead><tr><th>Anbieter / Modell</th><th>Baseline</th><th class="num">Aufrufe</th><th class="num">Gespart (Bytes)</th><th class="num">Quote</th></tr></thead>
                   <tbody id="breakdownBody"></tbody>
                 </table>
               </div>
@@ -205,7 +184,7 @@
       <!-- ---- ZEITVERLAUF ---- -->
       <section class="view-panel" id="view-trend">
         <div class="trend-head">
-          <div class="panel-title" style="border:none; padding:0;"><span class="uc">Gesparte Tokens &middot; Zeitverlauf</span></div>
+          <div class="panel-title" style="border:none; padding:0;"><span class="uc">Gesparte Bytes &middot; Zeitverlauf</span></div>
           <div class="window-switch" id="windowSwitch">
             <button type="button" data-window="day" class="active">Tag</button>
             <button type="button" data-window="week">Woche</button>
@@ -222,7 +201,7 @@
         <div class="panel" style="margin-top:10px;">
           <div class="panel-body" style="padding-top:8px;">
             <table class="breakdown">
-              <thead><tr><th>Periode</th><th class="num">Aufrufe</th><th class="num">Ohne</th><th class="num">Gespart</th><th class="num">Quote</th></tr></thead>
+              <thead><tr><th>Periode</th><th class="num">Aufrufe</th><th class="num">Dateien (Bytes)</th><th class="num">Gespart (Bytes)</th><th class="num">Quote</th></tr></thead>
               <tbody id="trendBody"></tbody>
             </table>
           </div>

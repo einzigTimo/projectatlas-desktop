@@ -68,16 +68,15 @@ use runtime::{
     build_settings_report, byte_count_to_tokens, canonical_project_root,
     canonical_source_project_root, classified_ranked_file_nodes_with_reasons,
     config_root_mismatch_error, default_cli_project_root, default_mcp_project_root,
-    defaultable_cli_project_root, estimated_source_tokens_for_indexed_files,
-    estimated_source_tokens_for_paths, index_work_control, init_config_path, init_path_status,
+    defaultable_cli_project_root, index_work_control, init_config_path, init_path_status,
     lint_project, load_synchronized_repository_token_report, next_step_report_payload,
     next_step_report_with_selection, normalized_folder_filter, open_atlas_store_for_project,
     open_atlas_store_read_only_for_project, open_federated_atlas_stores_for_project,
     open_fresh_atlas_store_for_project, purpose_curation_page, ranked_folder_nodes_with_reasons,
-    read_indexed_file_content, record_directory_walk_usage_estimate, record_usage_estimate,
-    record_usage_text, render_classified_ranked_file_rows, render_classified_symbol_rows,
-    render_coverage_report, render_health_page, render_purpose_curation_page,
-    render_purpose_review_report, reset_index_files, resolved_mcp_config_path, review_purposes,
+    read_indexed_file_content, record_usage_output, record_usage_text,
+    render_classified_ranked_file_rows, render_classified_symbol_rows, render_coverage_report,
+    render_health_page, render_purpose_curation_page, render_purpose_review_report,
+    reset_index_files, resolved_mcp_config_path, review_purposes,
     run_init_bootstrap_with_host_configs, run_scan_pipeline_controlled,
     run_single_watch_refresh_controlled, run_symbol_build_pipeline_controlled, run_watch_loop,
     standalone_index_work_control, strip_legacy_purpose, validate_purpose_review_admission,
@@ -1296,7 +1295,7 @@ enum Command {
         #[arg(long)]
         strict_untracked: bool,
     },
-    /// Print estimated token savings for recorded funnel usage.
+    /// Print measured output bytes and full-file byte savings for recorded funnel usage.
     Token {
         /// Optional caller-visible compatibility-label filter.
         #[arg(long)]
@@ -1755,7 +1754,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
             let store = open_index_for_read(cli)?;
             let overview = store.overview()?;
             let toon = render_overview(&overview);
-            print_tracked_directory_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -1763,7 +1762,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "overview",
                 None,
                 None,
-                || estimated_source_tokens_for_indexed_files(&store, None, None),
                 &toon,
                 &overview,
             )?;
@@ -1773,7 +1771,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
             let selected = ranked_folder_nodes_with_reasons(&store, query, *limit)?;
             let toon = render_ranked_nodes("folders", &selected);
             let payload = render_ranked_node_rows("folders", &selected);
-            print_tracked_directory_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -1781,7 +1779,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "folders",
                 None,
                 Some(query.clone()),
-                || estimated_source_tokens_for_indexed_files(&store, None, None),
                 &toon,
                 &payload,
             )?;
@@ -1811,7 +1808,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
             )?;
             let payload = render_classified_ranked_file_rows(&selected);
             let toon = encode_agent_payload(&json!({ "files": &payload }));
-            print_tracked_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -1819,13 +1816,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "files",
                 file_pattern.clone().or_else(|| folder_filter.clone()),
                 query.clone(),
-                || {
-                    estimated_source_tokens_for_indexed_files(
-                        &store,
-                        folder_filter.as_deref(),
-                        file_pattern.as_deref(),
-                    )
-                },
                 &toon,
                 &payload,
             )?;
@@ -1844,7 +1834,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
             )?;
             let payload = next_step_report_payload(&report);
             let toon = encode_agent_payload(&json!({ "next": payload }));
-            print_tracked_directory_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -1852,7 +1842,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "next",
                 None,
                 Some(query.clone()),
-                || estimated_source_tokens_for_indexed_files(&store, None, None),
                 &toon,
                 &payload,
             )?;
@@ -1938,7 +1927,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 None,
             )?;
             let toon = render_search_report(&report);
-            print_tracked_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -1946,7 +1935,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "search",
                 file_pattern.clone(),
                 Some(pattern.clone()),
-                || Ok(byte_count_to_tokens(report.searched_bytes)),
                 &toon,
                 &report,
             )?;
@@ -2065,7 +2053,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 let toon = encode_agent_payload(&json!({
                     "symbols": &symbol_rows,
                 }));
-                print_tracked_output_estimate(
+                print_tracked_output(
                     cli.format,
                     &store,
                     usage_instance,
@@ -2073,14 +2061,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                     "symbols",
                     file.clone(),
                     query.clone(),
-                    || {
-                        estimated_source_tokens_for_paths(
-                            &store,
-                            symbols
-                                .iter()
-                                .map(|classified| classified.symbol.path.as_str()),
-                        )
-                    },
                     &toon,
                     &symbol_rows,
                 )?;
@@ -2190,7 +2170,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                     let relations =
                         store.load_symbol_relations(file.as_deref(), query.as_deref(), *limit)?;
                     let toon = render_symbol_relations(&relations);
-                    print_tracked_output_estimate(
+                    print_tracked_output(
                         cli.format,
                         store,
                         usage_instance,
@@ -2198,12 +2178,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                         "symbol-relations",
                         file.clone(),
                         query.clone(),
-                        || {
-                            estimated_source_tokens_for_paths(
-                                store,
-                                relations.iter().map(|relation| relation.path.as_str()),
-                            )
-                        },
                         &toon,
                         &relations,
                     )?;
@@ -2679,7 +2653,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 )?;
                 let mut report = load_coverage_discovery(&store, query)?;
                 let toon = finalize_coverage_output(cli.format, &mut report)?;
-                print_tracked_directory_output_estimate(
+                print_tracked_output(
                     cli.format,
                     &store,
                     usage_instance,
@@ -2687,7 +2661,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                     "health-check",
                     None,
                     None,
-                    || estimated_source_tokens_for_indexed_files(&store, None, None),
                     &toon,
                     &report,
                 )?;
@@ -2708,7 +2681,7 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
             );
             let page = store.unresolved_health_findings_page_current(&query)?;
             let toon = render_health_page(&page, &query);
-            print_tracked_directory_output_estimate(
+            print_tracked_output(
                 cli.format,
                 &store,
                 usage_instance,
@@ -2716,7 +2689,6 @@ fn run(cli: &mut Cli) -> Result<(), CliError> {
                 "health-check",
                 None,
                 None,
-                || estimated_source_tokens_for_indexed_files(&store, None, None),
                 &toon,
                 &page,
             )?;
@@ -4236,8 +4208,9 @@ fn trimmed_cli_filter(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Record estimated-token telemetry for the exact emitted CLI payload.
-fn print_tracked_directory_output_estimate<T, F>(
+/// Record the exact emitted byte size for a CLI payload without measured counterpart.
+#[allow(clippy::too_many_arguments)]
+fn print_tracked_output<T>(
     format: OutputFormat,
     store: &AtlasStore,
     usage_instance: Option<UsageRuntimeInstance>,
@@ -4245,68 +4218,21 @@ fn print_tracked_directory_output_estimate<T, F>(
     command: &str,
     path: Option<String>,
     query: Option<String>,
-    estimate_without_projectatlas: F,
     toon: &str,
     payload: &T,
 ) -> Result<(), CliError>
 where
     T: serde::Serialize,
-    F: FnOnce() -> Result<usize, CliError>,
 {
     let output = serialized_output(format, toon, payload)?;
     write_stdout(&output)?;
-    if usage_instance.is_none() || runtime::telemetry_disabled() {
-        return Ok(());
-    }
-    let Ok(estimated_without_projectatlas) = estimate_without_projectatlas() else {
-        return Ok(());
-    };
-    drop(record_directory_walk_usage_estimate(
+    drop(record_usage_output(
         store,
         usage_instance,
         session,
         command,
         path,
         query,
-        estimated_without_projectatlas,
-        &output,
-    ));
-    Ok(())
-}
-
-/// Record candidate-set telemetry for the exact emitted CLI payload.
-fn print_tracked_output_estimate<T, F>(
-    format: OutputFormat,
-    store: &AtlasStore,
-    usage_instance: Option<UsageRuntimeInstance>,
-    session: &str,
-    command: &str,
-    path: Option<String>,
-    query: Option<String>,
-    estimate_without_projectatlas: F,
-    toon: &str,
-    payload: &T,
-) -> Result<(), CliError>
-where
-    T: serde::Serialize,
-    F: FnOnce() -> Result<usize, CliError>,
-{
-    let output = serialized_output(format, toon, payload)?;
-    write_stdout(&output)?;
-    if usage_instance.is_none() || runtime::telemetry_disabled() {
-        return Ok(());
-    }
-    let Ok(estimated_without_projectatlas) = estimate_without_projectatlas() else {
-        return Ok(());
-    };
-    drop(record_usage_estimate(
-        store,
-        usage_instance,
-        session,
-        command,
-        path,
-        query,
-        estimated_without_projectatlas,
         &output,
     ));
     Ok(())
@@ -5480,9 +5406,8 @@ mod tests {
         required_mcp_surface_present,
     };
     use super::runtime::{
-        TextIndexOptions, byte_count_to_tokens, estimated_source_tokens_for_file_node,
-        event_kind_affects_index, is_symbol_candidate, primary_symbol_names,
-        refresh_structural_summaries_for_nodes, refresh_text_index_for_nodes,
+        TextIndexOptions, byte_count_to_tokens, event_kind_affects_index, is_symbol_candidate,
+        primary_symbol_names, refresh_structural_summaries_for_nodes, refresh_text_index_for_nodes,
         refresh_text_index_for_nodes_with_rows, relation_targets, reset_index_files,
         suggest_file_purpose, summarize_symbol_graph, watch_path_affects_index,
         watch_path_requires_full_scan, watcher_status_report,
@@ -5507,7 +5432,7 @@ mod tests {
     use projectatlas_core::symbols::{
         CodeSymbol, ParserKind, RelationKind, SymbolGraph, SymbolKind, SymbolRelation,
     };
-    use projectatlas_core::telemetry::TokenOverview;
+    use projectatlas_core::telemetry::{TokenOverview, usage_from_text};
     use projectatlas_core::{
         IndexCancellation, IndexGeneration, IndexWorkControl, IndexWorkFailure, IndexWorkStage,
         Node, NodeKind, normalize_native_path_display,
@@ -6471,43 +6396,43 @@ mod tests {
     #[test]
     fn token_dashboard_is_human_readable_and_chart_backed() {
         let dashboard = render_token_dashboard(
-            &TokenOverview::from_estimated_totals(3, 12_000, 3_000),
+            &TokenOverview::from_events(&[usage_from_text(
+                "session-a",
+                "summary",
+                Some("src/lib.rs".to_string()),
+                None,
+                &"x".repeat(12_000),
+                &"x".repeat(3_000),
+            )]),
             Some("session-a"),
         );
 
         assert!(dashboard.contains("ProjectAtlas"));
-        assert!(dashboard.contains("Token Impact"));
+        assert!(dashboard.contains("Token Telemetry"));
         assert!(dashboard.contains("session-a"));
-        assert!(dashboard.contains("A V E R A G E   T O K E N S   A V O I D E D"));
-        assert!(dashboard.contains("Total Tokens Avoided"));
-        assert!(dashboard.contains("Without ProjectAtlas"));
-        assert!(dashboard.contains("With ProjectAtlas"));
-        assert!(dashboard.contains("Average avoided"));
-        assert!(dashboard.contains("Maximum avoided"));
-        assert!(dashboard.contains("N A V I G A T I O N   W O R K   A V O I D E D"));
-        assert!(
-            dashboard
-                .to_ascii_lowercase()
-                .contains("file reads avoided")
-        );
-        assert!(!dashboard.contains("Broad folder walks skipped"));
-        assert!(!dashboard.contains("Candidate files not opened"));
-        assert!(!dashboard.contains("source steps account for"));
-        assert!(dashboard.contains("S A V I N G S   C O M P O S I T I O N"));
-        assert!(dashboard.contains("S I G N A L"));
-        assert!(dashboard.contains("W H E R E   T H E   S A V I N G S   C A M E   F R O M"));
-        assert!(dashboard.contains("C A L I B R A T I O N   &   N O T E S"));
-        assert!(dashboard.contains("Confidence"));
-        assert!(dashboard.contains("Tokenizer audit"));
+        assert!(dashboard.contains("M E A S U R E D   B Y T E S   S A V E D"));
+        assert!(dashboard.contains("9,000 B"));
+        assert!(dashboard.contains("12,000 B"));
+        assert!(dashboard.contains("3,000 B"));
+        assert!(dashboard.contains("A T L A S   O U T P U T"));
+        assert!(dashboard.contains("M E A S U R E D   C A L L S"));
         assert!(
             dashboard
                 .chars()
                 .any(|character| matches!(character, '█' | '\u{2801}'..='\u{28ff}'))
         );
-        assert!(!dashboard.contains("Gross tokens: without vs with ProjectAtlas"));
-        assert!(!dashboard.contains("REQUESTED BENCHMARK EVIDENCE"));
-        assert!(!dashboard.contains("How ProjectAtlas helped"));
-        assert!(!dashboard.contains("Saved-token trends"));
+        for forbidden in [
+            "avoided",
+            "Avoided",
+            "modeled narrowing",
+            "Confidence",
+            "walk",
+        ] {
+            assert!(
+                !dashboard.contains(forbidden),
+                "dashboard must not show {forbidden:?}"
+            );
+        }
     }
 
     #[test]
@@ -6778,7 +6703,14 @@ mod tests {
         }
         let atlas = load_token_atlas_preview(&store);
         let dashboard = render_token_dashboard_with_atlas_at_width(
-            &TokenOverview::from_estimated_totals(4, 16_000, 4_000),
+            &TokenOverview::from_events(&[usage_from_text(
+                "resolved-loader",
+                "summary",
+                None,
+                None,
+                &"x".repeat(16_000),
+                &"x".repeat(4_000),
+            )]),
             Some("resolved-loader"),
             &atlas,
             200,
@@ -6818,7 +6750,7 @@ mod tests {
             content_hash: Some("hash".to_string()),
         };
 
-        assert_eq!(estimated_source_tokens_for_file_node(&node), 11);
+        assert_eq!(node.size_bytes, Some(41));
         assert_eq!(byte_count_to_tokens(9), 3);
     }
 
@@ -7117,7 +7049,7 @@ mod tests {
             if !token_text.contains("calls: 2") {
                 return Err("atlas_token_report did not count MCP usage events".into());
             }
-            if !token_text.contains("buckets[") || !token_text.contains("heuristic_estimate") {
+            if !token_text.contains("buckets[") || !token_text.contains("source_bytes") {
                 return Err(
                     "atlas_token_report result did not contain bucket accuracy labels".into(),
                 );

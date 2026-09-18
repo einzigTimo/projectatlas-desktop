@@ -434,9 +434,10 @@ Default sequence for coding tasks:
 
 ### Token reporting and human TUI
 
-Token savings estimate context that ProjectAtlas prevented the agent from wasting: wrong-folder exploration,
-wrong-file opens, and unnecessary full-code reads avoided by the session-brief -> returned next call
--> exact-slice funnel. Agent and MCP surfaces stay structured TOON; Ratatui terminal charts belong only to the
+Token reports contain measured values only. ProjectAtlas records the exact UTF-8 byte length of every emitted
+payload. A saving is reported only where the same call loaded one complete file (summary, outline, slice): the
+exact file bytes minus the exact emitted bytes. Navigation, search, and health calls report their emitted bytes
+without any counterpart. Agent and MCP surfaces stay structured TOON; Ratatui terminal charts belong only to the
 explicit `projectatlas token --view tui` view.
 
 The TUI captures one columns-by-rows viewport. The established overview uses the
@@ -448,10 +449,13 @@ or test output, valid non-zero `COLUMNS` and `LINES` provide deterministic bound
 invalid or zero values fall back to 140x50. Structured CLI and MCP token reports
 are unchanged.
 
-The default token report is a fast offline heuristic, not provider billing telemetry. It estimates emitted
-ProjectAtlas payload text with `ceil(chars / 4)` and file-size baselines with `ceil(bytes / 4)`. Reports expose
-bucket, baseline kind, confidence, accounting layer, provider, model, tokenizer backend, and accuracy labels so agents can separate
-observed full-file compression from modeled navigation savings. Use `tokens_avoided` or `average_tokens_avoided` for the primary value: measured compression plus unchanged non-folder savings plus `floor(deduped aggregate directory-walk baseline / 2)`, minus the complete Atlas payload. `maximum_tokens_avoided` uses the same inputs but retains the full all-files directory-walk baseline. `average_policy` identifies this as a fixed 50% policy estimate, not a benchmark, provider counter, or measured Codex average. `estimated_saved` remains the legacy gross compatibility value. Local tokenizer calibration is explicit with `projectatlas token --tokenizer o200k_base` or `projectatlas token --tokenizer cl100k_base`; normal orientation and `atlas_token_report` must stay local and fast.
+No tokenizer is applied and no counterfactual baseline (directory walks, candidate sets, policy shares) is recorded
+or reported, so every size is labeled `unit: utf8_bytes`. Reports expose `calls`, `measured_calls`, `output_bytes`,
+`compared_calls`, `compared_source_bytes`, `compared_output_bytes`, `saved_bytes`, `savings_rate`, and
+`savings_basis`. Rows written by older releases with heuristic or modeled values stay in the database for
+compatibility; they are counted in `calls` and `excluded_unmeasured_calls` but never contribute sizes. Local
+tokenizer calibration of indexed files is explicit with `projectatlas token --tokenizer o200k_base` or
+`projectatlas token --tokenizer cl100k_base`; normal orientation and `atlas_token_report` must stay local and fast.
 
 In a registered-worktree setup, control/main scope reports repository-wide totals: native control events, alias-routed MCP events recorded once with their worktree origin, and monotonically synchronized local aggregates from active and retired registrations. Hydration clears telemetry so a copied baseline cannot double count main history. Synchronization copies no raw per-session query/path detail and a stale retry cannot decrease or duplicate the accepted total. An exact worktree report stays local and labels the selected alias; the existing TUI receives the combined control overview without a new selector screen or layout change.
 
@@ -487,23 +491,14 @@ paths are rejected at the request boundary.
 The comparison is read-only publication evidence. It is attached once as
 `TokenOverview.agent_efficiency` and rendered identically by CLI JSON/TOON and
 `atlas_token_report`; the Ratatui overview never renders it. The benchmark is
-never written to SQLite, added to live `tokens_avoided` or file-read estimates,
+never written to SQLite, added to live measured byte totals,
 or cached.
 Provider token counters remain descriptive-only; capability rows report calls
 and emitted bytes without claiming per-tool token causality.
 
-Read-avoidance counters are also local workflow estimates. Observed
-summary/outline/slice replacements are stronger evidence than search-modeled
-file reads avoided; aggregate bucket-only reports must stay `not_recorded`
-instead of inventing whole-file-read counts.
-
-The TUI keeps the observed summary/slice and search-modeled file-read sources as
-separate proportional bars rather than adding standalone bar panels. Average
-tokens avoided remains the dominant hero; complete average and maximum
-without-minus-with equations are stacked directly below it.
-Broad folder walks and candidate files remain in the exact source ledger, but
-only the folder-walk row receives the 50% average-policy adjustment. The ledger
-and composition use the same persisted rows, counts, and token allocation.
+The TUI shows the measured saving hero with its file-minus-output byte equation as separate proportional bars
+rather than adding standalone bar panels. Output-only calls and full-file comparisons remain in the exact
+measured-call ledger; excluded legacy calls are shown only as a count.
 
 For freshness, treat `projectatlas watch` as the steady-state updater for local editing sessions. Line slices
 validate against SQLite and then read the current file from disk. Symbol slices also read current disk content,

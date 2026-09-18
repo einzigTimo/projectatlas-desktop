@@ -2,77 +2,61 @@
 
 ## Purpose
 
-Define how ProjectAtlas derives, reports, and presents compatible average and maximum token-impact estimates from existing telemetry.
+Define how ProjectAtlas records, reports, and presents token telemetry using measured values only. The capability name is historical; reports contain no estimates, modeled baselines, or policy shares.
 
 ## Requirements
 
-### Requirement: Reports distinguish average and maximum token impact
-ProjectAtlas SHALL report explicit `average_tokens_avoided` and `maximum_tokens_avoided` values from the same admitted telemetry, SHALL retain `tokens_avoided` as the primary compatibility field equal to `average_tokens_avoided`, and SHALL keep the existing all-files result as `maximum_tokens_avoided`.
+### Requirement: Reports contain only measured sizes
+ProjectAtlas SHALL report every size as an exact UTF-8 byte length labeled `unit: utf8_bytes`, SHALL NOT apply a heuristic or model tokenizer to reported telemetry, and SHALL NOT report counterfactual baselines such as directory walks, candidate sets, or fixed policy shares.
 
-#### Scenario: Mixed accounting report
-- **WHEN** a report contains observed compression, modeled directory-walk navigation, and other modeled categories
-- **THEN** both totals include observed compression and the other modeled categories unchanged, while only the average total discounts the directory-walk baseline
+#### Scenario: Structured overview
+- **WHEN** a CLI JSON/TOON consumer or `atlas_token_report` reads the token overview
+- **THEN** the report exposes `unit`, `measurement`, `savings_basis`, `calls`, `measured_calls`, `excluded_unmeasured_calls`, `output_bytes`, `compared_calls`, `compared_source_bytes`, `compared_output_bytes`, `saved_bytes`, `savings_rate`, and measured buckets, and exposes no `tokens_avoided`, `average_policy`, or modeled read-avoidance field
 
-#### Scenario: Existing structured consumer
-- **WHEN** an existing CLI or MCP consumer reads the v0.4.4 token overview
-- **THEN** every existing field remains present and `tokens_avoided` identifies the primary average value
+#### Scenario: Trend report
+- **WHEN** a trend report groups telemetry by period
+- **THEN** each period reports the same measured byte totals and only measured buckets
 
-### Requirement: Average folder-navigation policy is reproducible
-ProjectAtlas SHALL calculate the average modeled `directory_walk` contribution as `floor(deduped_aggregate_without_projectatlas / 2) - aggregate_with_projectatlas`, SHALL calculate the matching maximum contribution as `deduped_aggregate_without_projectatlas - aggregate_with_projectatlas`, and SHALL apply no 50% adjustment to any other denominator kind.
+### Requirement: Savings require a measured counterpart in the same call
+ProjectAtlas SHALL report a saving only for calls that loaded one complete file and emitted a response in the same call, computed as the exact file bytes minus the exact emitted bytes, and SHALL name that basis in the report.
 
-#### Scenario: One directory-walk event
-- **WHEN** a modeled directory-walk baseline is 101 tokens and the Atlas payload is 20 tokens
-- **THEN** the average modeled component is 30 tokens and the maximum modeled component is 81 tokens
+#### Scenario: Summary, outline, or slice
+- **WHEN** a summary, outline, or slice call loads a 10-byte file and emits 3 bytes
+- **THEN** the call is a compared call with `source_bytes` 10, `output_bytes` 3, and `saved_bytes` 7
 
-#### Scenario: Non-folder modeled event
-- **WHEN** a modeled event uses `selected_candidates` or another non-directory-walk denominator
-- **THEN** its signed contribution is identical in the average and maximum totals
+#### Scenario: Output exceeds the loaded file
+- **WHEN** the emitted response is larger than the loaded file
+- **THEN** the saving remains a negative signed value and is not clamped
 
-#### Scenario: Payload exceeds average baseline
-- **WHEN** the Atlas payload exceeds half of a directory-walk baseline
-- **THEN** the average component remains a negative signed value and is not clamped
+#### Scenario: Navigation, search, or health call
+- **WHEN** a call has no complete file loaded in the same call
+- **THEN** only its emitted bytes are recorded in the `atlas_output` bucket, the event carries no saving value, and the call contributes no saving
 
-### Requirement: Baseline deduplication precedes the average policy
-ProjectAtlas SHALL preserve the existing modeled-baseline deduplication and SHALL apply the 50% directory-walk policy to the single retained baseline while subtracting every admitted Atlas payload unchanged.
+### Requirement: No new modeled telemetry is recorded
+ProjectAtlas SHALL NOT compute or persist modeled navigation baselines for CLI or MCP calls.
 
-#### Scenario: Repeated folder baseline
-- **WHEN** one directory-walk baseline is repeated within its dedupe scope
-- **THEN** both totals count the retained baseline once, the average total halves it once, and both totals subtract all emitted Atlas payloads
+#### Scenario: Navigation call
+- **WHEN** an agent calls overview, folders, files, next, symbols, symbol relations, search, health, or purpose-queue tools
+- **THEN** the persisted event carries `estimate_method: utf8_bytes_exact`, `accounting_layer: observed_output`, and a zero counterpart
 
-#### Scenario: Several odd retained folder baselines
-- **WHEN** several directory-walk baselines remain after deduplication
-- **THEN** ProjectAtlas sums the retained folder baselines, rounds down once after applying 50%, and subtracts the complete aggregate Atlas payload
+### Requirement: Legacy rows stay stored but are excluded from sizes
+ProjectAtlas SHALL keep telemetry rows written by earlier releases without schema migration or mutation, SHALL count them in `calls` and `excluded_unmeasured_calls`, and SHALL exclude every heuristic or modeled row from all reported byte totals, buckets, trends, TUI values, and desktop projections.
 
-### Requirement: Existing storage and accounting remain compatible
-ProjectAtlas SHALL derive the two values from existing raw or aggregate telemetry without changing the SQLite schema, stored events, pruning, transactions, WAL behavior, buckets, trends, read-avoidance counters, search baselines, or tokenizer calculations, and MAY retain one additional reserved directory-walk overflow dimension so the policy discriminator survives normal dimension capacity.
-
-#### Scenario: Existing database report
-- **WHEN** v0.4.4 opens a compatible database created by v0.4.3
-- **THEN** it derives average and maximum values without schema migration or stored-event mutation and preserves all other report results
-
-#### Scenario: Predecessor overflow lost the denominator
-- **WHEN** an existing generic overflow aggregate contains modeled telemetry whose original denominator cannot be recovered
-- **THEN** its contribution remains at the maximum and `average_policy.evidence` explicitly identifies the unclassified overflow fallback
-
-#### Scenario: New directory walk reaches dimension capacity
-- **WHEN** a new directory-walk event is routed to bounded dimension overflow
-- **THEN** one reserved overflow dimension retains the directory-walk discriminator and the durable average matches raw-event accounting
+#### Scenario: Database with modeled directory-walk rows
+- **WHEN** a database contains legacy `directory_walk`, `selected_candidates`, or heuristic full-file rows
+- **THEN** the overview, trends, CLI, MCP, TUI, and desktop views report none of their sizes while still counting their calls as excluded
 
 #### Scenario: Raw and durable aggregate parity
 - **WHEN** equivalent telemetry is reported directly from raw events and after a real SQLite write/read round trip
-- **THEN** average and maximum totals are identical across both paths
+- **THEN** the measured totals are identical across both paths
 
-### Requirement: TUI emphasizes average and visibly compares maximum
-The token overview TUI SHALL use average tokens avoided as its primary hero, SHALL retain the existing visual composition, and SHALL stack two complete `Without ProjectAtlas - With ProjectAtlas = avoided` equations: average first and maximum second. The equations SHALL use the concise result labels `Average avoided` and `Maximum avoided` without explanatory policy subtext in the hero panel.
+### Requirement: TUI shows only measured values
+The token overview TUI SHALL use the measured saved bytes as its hero with the complete `loaded file bytes - emitted bytes = saved bytes` equation, SHALL show total measured output bytes and a measured-call ledger, and SHALL show legacy rows only as an excluded call count.
 
-#### Scenario: Desktop dashboard
-- **WHEN** the token overview renders at the supported desktop width
-- **THEN** the average hero is dominant, the complete average and maximum equations are visible one below the other, and existing navigation, composition, source, notes, status, and optional Atlas sections remain recognizable
+#### Scenario: Full dashboard
+- **WHEN** the token overview renders at the supported width
+- **THEN** no avoided, modeled, policy, or directory-walk value is visible
 
-#### Scenario: Narrow dashboard
-- **WHEN** the token overview renders at the supported narrow width
-- **THEN** both complete equations and their average/maximum result labels remain readable without overlap or truncation of core information
-
-#### Scenario: Theme variants
-- **WHEN** the dashboard renders in dark, light, and terminal themes
-- **THEN** average and maximum labels, values, bars, signed states, and surrounding panel boundaries remain visually distinguishable without relying on color alone
+#### Scenario: Compact dashboards and themes
+- **WHEN** the dashboard renders below full size or in dark, light, and terminal themes
+- **THEN** measured saving, output bytes, and the excluded call count remain readable and negative savings keep their warning style

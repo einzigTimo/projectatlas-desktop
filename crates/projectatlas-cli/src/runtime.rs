@@ -43,7 +43,6 @@ use projectatlas_core::language::{
 };
 #[cfg(all(test, feature = "optional-parser-supervisor"))]
 use projectatlas_core::optional_parser_pack::OPTIONAL_PARSER_PACK_PROJECTATLAS_VERSION;
-use projectatlas_core::outline::estimate_tokens;
 use projectatlas_core::relation_capabilities::{
     RelationFamilyInventoryReport, relation_family_inventory_report,
 };
@@ -51,9 +50,7 @@ use projectatlas_core::symbols::{
     ParserKind, RelationKind, SourceParseMetadata, SymbolGraph, SymbolKind,
 };
 use projectatlas_core::telemetry::{
-    TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_BASELINE_SELECTED_CANDIDATES,
-    TOKEN_BUCKET_NAVIGATION_AVOIDANCE, TOKEN_CONFIDENCE_INFERRED, TOKEN_CONFIDENCE_POLICY_ESTIMATE,
-    UsageInstanceId, UsageInstanceOwner, usage_from_estimates_with_context, usage_from_text,
+    UsageInstanceId, UsageInstanceOwner, usage_from_output, usage_from_text,
 };
 use projectatlas_core::toon::{encode_agent_payload, render_ranked_node_rows, render_symbol_rows};
 use projectatlas_core::{
@@ -82,8 +79,8 @@ use projectatlas_fs::{
 };
 use projectatlas_service::{
     ClassifiedRankedNode, CoverageDiscoveryReport, FederatedInputWork, FederatedStore,
-    FilePathMatcher, MAX_FEDERATED_DATABASE_BYTES, MAX_FEDERATED_INPUT_BYTES, NextStepReport,
-    TokenReport, TokenReportRequest,
+    MAX_FEDERATED_DATABASE_BYTES, MAX_FEDERATED_INPUT_BYTES, NextStepReport, TokenReport,
+    TokenReportRequest,
     build_next_report_with_selection as build_next_report_with_selection_service,
     load_agent_efficiency_comparison,
     load_classified_ranked_file_nodes_with_reasons as load_classified_ranked_file_nodes_with_reasons_service,
@@ -3424,46 +3421,15 @@ impl UsageRuntimeInstance {
     }
 }
 
-/// Record a usage event from a fast baseline estimate and actual atlas payload.
-pub(crate) fn record_usage_estimate(
+/// Record the exact emitted byte size of one call that has no measured counterpart.
+pub(crate) fn record_usage_output(
     store: &AtlasStore,
     usage_instance: Option<UsageRuntimeInstance>,
     session: &str,
     command: &str,
     path: Option<String>,
     query: Option<String>,
-    estimated_without_projectatlas: usize,
     projectatlas_text: &str,
-) -> Result<(), CliError> {
-    record_usage_estimate_with_context(
-        store,
-        usage_instance,
-        session,
-        command,
-        path,
-        query,
-        estimated_without_projectatlas,
-        projectatlas_text,
-        TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-        TOKEN_BASELINE_SELECTED_CANDIDATES,
-        TOKEN_CONFIDENCE_INFERRED,
-    )
-}
-
-/// Record a usage event from a fast baseline estimate and explicit baseline semantics.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_usage_estimate_with_context(
-    store: &AtlasStore,
-    usage_instance: Option<UsageRuntimeInstance>,
-    session: &str,
-    command: &str,
-    path: Option<String>,
-    query: Option<String>,
-    estimated_without_projectatlas: usize,
-    projectatlas_text: &str,
-    token_savings_bucket: &str,
-    baseline_kind: &str,
-    confidence: &str,
 ) -> Result<(), CliError> {
     let Some(usage_instance) = usage_instance.filter(|_| !telemetry_disabled()) else {
         return Ok(());
@@ -3471,48 +3437,12 @@ pub(crate) fn record_usage_estimate_with_context(
     store.finish_index_read_snapshot()?;
     usage_instance.record(
         store,
-        &usage_from_estimates_with_context(
-            session,
-            command,
-            path,
-            query,
-            estimated_without_projectatlas,
-            estimate_tokens(projectatlas_text),
-            token_savings_bucket,
-            baseline_kind,
-            confidence,
-        ),
+        &usage_from_output(session, command, path, query, projectatlas_text),
     )?;
     Ok(())
 }
 
-/// Record a broad directory-walk avoidance estimate.
-pub(crate) fn record_directory_walk_usage_estimate(
-    store: &AtlasStore,
-    usage_instance: Option<UsageRuntimeInstance>,
-    session: &str,
-    command: &str,
-    path: Option<String>,
-    query: Option<String>,
-    estimated_without_projectatlas: usize,
-    projectatlas_text: &str,
-) -> Result<(), CliError> {
-    record_usage_estimate_with_context(
-        store,
-        usage_instance,
-        session,
-        command,
-        path,
-        query,
-        estimated_without_projectatlas,
-        projectatlas_text,
-        TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-        TOKEN_BASELINE_DIRECTORY_WALK,
-        TOKEN_CONFIDENCE_POLICY_ESTIMATE,
-    )
-}
-
-/// Record a usage event from baseline and emitted text unless telemetry is disabled.
+/// Record a measured comparison between one complete loaded file and the emitted text.
 pub(crate) fn record_usage_text(
     store: &AtlasStore,
     usage_instance: Option<UsageRuntimeInstance>,
@@ -3544,43 +3474,6 @@ pub(crate) fn record_usage_text(
 /// Return whether telemetry writes are disabled for read-only review contexts.
 pub(crate) fn telemetry_disabled() -> bool {
     truthy_env("PROJECTATLAS_NO_TELEMETRY")
-}
-
-/// Estimate broad source tokens represented by indexed files with SQL aggregates.
-pub(crate) fn estimated_source_tokens_for_indexed_files(
-    store: &AtlasStore,
-    folder: Option<&str>,
-    file_pattern: Option<&str>,
-) -> Result<usize, CliError> {
-    let matcher = FilePathMatcher::new(file_pattern)?;
-    let mut total = 0usize;
-    store.visit_file_token_estimates(folder, |path, size_bytes| {
-        if matcher.is_match(&path) {
-            total =
-                total.saturating_add(estimated_source_tokens_for_file_metadata(&path, size_bytes));
-        }
-        Ok(true)
-    })?;
-    Ok(total)
-}
-
-/// Estimate source tokens for one indexed file without reading it.
-pub(crate) fn estimated_source_tokens_for_file_node(node: &Node) -> usize {
-    estimated_source_tokens_for_file_metadata(&node.path, node.size_bytes)
-}
-
-/// Estimate source tokens for persisted file metadata.
-pub(crate) fn estimated_source_tokens_for_file_metadata(
-    path: &str,
-    size_bytes: Option<u64>,
-) -> usize {
-    size_bytes.map_or_else(|| estimate_tokens(path), byte_size_to_tokens)
-}
-
-/// Estimate source tokens from a byte count with the shared token heuristic.
-pub(crate) fn byte_size_to_tokens(bytes: u64) -> usize {
-    let token_estimate = bytes.div_ceil(4);
-    usize::try_from(token_estimate).unwrap_or(usize::MAX)
 }
 
 /// Estimate source tokens from a searched byte count.
@@ -4644,37 +4537,6 @@ fn health_next_start_index(page: &HealthFindingsPage) -> Option<usize> {
     } else {
         Some(page_end)
     }
-}
-
-/// Estimate source tokens for repository paths referenced by symbols/relations.
-pub(crate) fn estimated_source_tokens_for_paths<'a>(
-    store: &AtlasStore,
-    paths: impl Iterator<Item = &'a str>,
-) -> Result<usize, CliError> {
-    let mut seen = HashSet::new();
-    let mut total = 0usize;
-    for path in paths {
-        if seen.insert(path.to_string()) {
-            total = total.saturating_add(estimated_source_tokens_for_path(store, path)?);
-        }
-    }
-    Ok(total)
-}
-
-/// Estimate source tokens for one indexed path, falling back safely for stale rows.
-pub(crate) fn estimated_source_tokens_for_path(
-    store: &AtlasStore,
-    path: &str,
-) -> Result<usize, CliError> {
-    if let Some(indexed) = store.load_node_by_path(path)?
-        && indexed.node.kind == NodeKind::File
-    {
-        return Ok(estimated_source_tokens_for_file_node(&indexed.node));
-    }
-    Ok(read_indexed_file_content(store, path).map_or_else(
-        |_| estimate_tokens(path),
-        |content| estimate_tokens(&content),
-    ))
 }
 
 /// Persisted file-text index report.

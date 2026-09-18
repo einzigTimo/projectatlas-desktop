@@ -8229,13 +8229,11 @@ fn resolved_ids_for_category(resolved_ids: &[String], category: &str) -> Vec<Str
 mod tests {
     use super::*;
     use projectatlas_core::telemetry::{
-        READ_AVOIDANCE_CONFIDENCE_MODELED, READ_AVOIDANCE_CONFIDENCE_NOT_RECORDED,
-        READ_AVOIDANCE_CONFIDENCE_OBSERVED, TOKEN_ACCOUNTING_MODELED_AVOIDANCE,
-        TOKEN_ACCURACY_HEURISTIC, TOKEN_BASELINE_SELECTED_CANDIDATES,
-        TOKEN_BUCKET_FULL_FILE_COMPRESSION, TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-        TOKEN_COMMAND_SEARCH, TOKEN_CONFIDENCE_INFERRED, TOKEN_DEDUPE_SCOPE_EVENT,
-        usage_from_estimates, usage_from_estimates_with_accounting,
-        usage_from_estimates_with_context, usage_from_text,
+        TOKEN_ACCOUNTING_MODELED_AVOIDANCE, TOKEN_ACCOUNTING_OBSERVED_DELTA,
+        TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_BUCKET_FULL_FILE_COMPRESSION,
+        TOKEN_BUCKET_NAVIGATION_AVOIDANCE, TOKEN_BUCKET_OUTPUT_ONLY, TOKEN_CONFIDENCE_OBSERVED,
+        TOKEN_CONFIDENCE_POLICY_ESTIMATE, TOKEN_DEDUPE_SCOPE_EVENT, usage_from_estimates,
+        usage_from_estimates_with_accounting, usage_from_output, usage_from_text,
     };
     use projectatlas_core::{NodeKind, normalized_parent};
     use std::error::Error;
@@ -8530,9 +8528,14 @@ mod tests {
         let telemetry = store.token_overview(Some("schema-session"))?;
         require_eq(&telemetry.calls, &1, "upgraded telemetry call count")?;
         require_eq(
-            &telemetry.estimated_saved,
-            &80,
-            "upgraded telemetry savings",
+            &telemetry.excluded_unmeasured_calls,
+            &1,
+            "upgraded legacy telemetry stays excluded",
+        )?;
+        require_eq(
+            &telemetry.output_bytes,
+            &0,
+            "upgraded legacy telemetry reports no sizes",
         )?;
         require_eq(
             &store.index_publication()?,
@@ -9004,64 +9007,42 @@ mod tests {
         let project = tempfile::tempdir()?;
         let mut store = AtlasStore::in_memory()?;
         store.set_project_root(project.path())?;
-        let mut session_event = usage_from_estimates(
+        store.record_usage(&usage_from_text(
             "session",
             "outline",
             Some("src/main.rs".to_string()),
             None,
-            100,
-            20,
-        );
-        session_event.estimated_tokens_saved = Some(1);
-        store.record_usage(&session_event)?;
-        let mut unknown_event = usage_from_estimates("session", "unknown", None, None, 0, 0);
+            "0123456789",
+            "0123",
+        ))?;
+        let mut unknown_event = usage_from_output("session", "unknown", None, None, "");
         unknown_event.estimated_tokens_without_projectatlas = None;
         unknown_event.estimated_tokens_with_projectatlas = None;
         unknown_event.estimated_tokens_saved = None;
         store.record_usage(&unknown_event)?;
-        store.record_usage(&usage_from_estimates(
+        store.record_usage(&usage_from_output(
             "other-session",
-            "outline",
-            Some("src/lib.rs".to_string()),
+            "search",
             None,
-            200,
-            50,
+            Some("needle".to_string()),
+            "hits",
         ))?;
         let overview = store.token_overview(Some("session"))?;
         require_eq(&overview.calls, &1, "usage call count")?;
-        require_eq(&overview.estimated_saved, &80, "saved token count")?;
+        require_eq(&overview.saved_bytes, &6, "measured saved bytes")?;
         require_eq(&overview.buckets.len(), &1, "usage bucket count")?;
-        require_eq(
-            &overview.buckets[0].accuracy,
-            &TOKEN_ACCURACY_HEURISTIC.to_string(),
-            "usage bucket accuracy",
-        )?;
         let all_sessions = store.token_overview(None)?;
         require_eq(&all_sessions.calls, &2, "all-session usage call count")?;
+        require_eq(&all_sessions.output_bytes, &8, "all-session output bytes")?;
         require_eq(
-            &all_sessions.estimated_without_projectatlas,
-            &300,
-            "all-session baseline tokens",
+            &all_sessions.compared_source_bytes,
+            &10,
+            "only full-file comparisons carry source bytes",
         )?;
         require_eq(
-            &all_sessions.estimated_with_projectatlas,
-            &70,
-            "all-session atlas tokens",
-        )?;
-        require_eq(
-            &all_sessions.estimated_saved,
-            &230,
-            "all-session saved tokens",
-        )?;
-        require_eq(
-            &all_sessions.likely_file_reads_avoided,
-            &0,
-            "non-search estimate events do not count as avoided file reads",
-        )?;
-        require_eq(
-            &all_sessions.read_avoidance_confidence,
-            &READ_AVOIDANCE_CONFIDENCE_NOT_RECORDED.to_string(),
-            "non-search estimate read avoidance confidence",
+            &all_sessions.saved_bytes,
+            &6,
+            "output-only calls add no saving",
         )?;
 
         store.record_usage(&usage_from_text(
@@ -9072,220 +9053,95 @@ mod tests {
             "abcdefghijkl",
             "abcd",
         ))?;
-        store.record_usage(&usage_from_estimates(
-            "bucketed", "folders", None, None, 100, 20,
+        store.record_usage(&usage_from_output(
+            "bucketed", "folders", None, None, "folders",
         ))?;
         let bucketed = store.token_overview(Some("bucketed"))?;
         require_eq(&bucketed.buckets.len(), &2, "bucketed overview count")?;
         require_eq(
             &bucketed.buckets[0].token_savings_bucket,
-            &TOKEN_BUCKET_FULL_FILE_COMPRESSION.to_string(),
-            "source compression bucket",
+            &TOKEN_BUCKET_OUTPUT_ONLY.to_string(),
+            "output bucket",
+        )?;
+        require_eq(
+            &bucketed.buckets[0].saved_bytes,
+            &None,
+            "output bucket claims no saving",
         )?;
         require_eq(
             &bucketed.buckets[1].token_savings_bucket,
-            &TOKEN_BUCKET_NAVIGATION_AVOIDANCE.to_string(),
-            "navigation bucket",
+            &TOKEN_BUCKET_FULL_FILE_COMPRESSION.to_string(),
+            "full-file bucket",
         )?;
+
+        let mut heuristic_observed = usage_from_estimates("legacy", "summary", None, None, 30, 5);
+        heuristic_observed.token_savings_bucket = TOKEN_BUCKET_FULL_FILE_COMPRESSION.to_string();
+        heuristic_observed.accounting_layer = TOKEN_ACCOUNTING_OBSERVED_DELTA.to_string();
+        heuristic_observed.confidence = TOKEN_CONFIDENCE_OBSERVED.to_string();
+        store.record_usage(&heuristic_observed)?;
+        store.record_usage(&usage_from_estimates(
+            "legacy", "search", None, None, 400, 40,
+        ))?;
+        store.record_usage(&usage_from_estimates_with_accounting(
+            "legacy",
+            "folders",
+            None,
+            None,
+            18_000_000,
+            40,
+            TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
+            TOKEN_BASELINE_DIRECTORY_WALK,
+            TOKEN_CONFIDENCE_POLICY_ESTIMATE,
+            TOKEN_ACCOUNTING_MODELED_AVOIDANCE,
+            TOKEN_BASELINE_DIRECTORY_WALK,
+            TOKEN_DEDUPE_SCOPE_EVENT,
+        ))?;
+        store.record_usage(&usage_from_text(
+            "legacy", "slice", None, None, "abcd", "ab",
+        ))?;
+        let legacy = store.token_overview(Some("legacy"))?;
+        require_eq(&legacy.calls, &4, "legacy calls stay counted")?;
         require_eq(
-            &bucketed.observed_file_read_replacements,
+            &legacy.measured_calls,
             &1,
-            "observed read replacement count",
+            "only the measured call is measured",
         )?;
         require_eq(
-            &bucketed.modeled_file_reads_avoided,
-            &0,
-            "folder navigation does not count as modeled file-read avoidance",
+            &legacy.excluded_unmeasured_calls,
+            &3,
+            "heuristic and modeled rows are excluded",
         )?;
+        require_eq(&legacy.output_bytes, &2, "legacy rows add no output")?;
+        require_eq(&legacy.saved_bytes, &2, "legacy rows add no saving")?;
+        require_eq(&legacy.buckets.len(), &1, "legacy buckets are hidden")?;
+        let legacy_trends = store.token_trends(Some("legacy"), TokenTrendWindow::Day)?;
         require_eq(
-            &bucketed.likely_file_reads_avoided,
-            &1,
-            "observed-only likely file reads avoided",
-        )?;
-        require_eq(
-            &bucketed.read_avoidance_confidence,
-            &READ_AVOIDANCE_CONFIDENCE_OBSERVED.to_string(),
-            "observed-only read avoidance confidence",
+            &legacy_trends.periods[0].saved_bytes,
+            &2,
+            "legacy rows add no trend saving",
         )?;
 
         store.record_usage(&usage_from_text(
-            "deduped",
-            "summary",
-            Some("src/lib.rs".to_string()),
-            None,
-            "abcdabcd",
-            "ab",
+            "negative", "outline", None, None, "ab", "abcde",
         ))?;
-        store.record_usage(&usage_from_estimates(
-            "deduped",
-            TOKEN_COMMAND_SEARCH,
-            None,
-            Some("token".to_string()),
-            400,
-            40,
-        ))?;
-        store.record_usage(&usage_from_estimates(
-            "deduped",
-            TOKEN_COMMAND_SEARCH,
-            None,
-            Some("token".to_string()),
-            400,
-            30,
-        ))?;
-        let deduped = store.token_overview(Some("deduped"))?;
-        require_eq(
-            &deduped.legacy_gross_estimated_saved,
-            &731,
-            "legacy gross saved tokens remains available",
-        )?;
-        require_eq(
-            &deduped.measured_tokens_saved,
-            &1,
-            "measured saved tokens remain separate",
-        )?;
-        require_eq(
-            &deduped.gross_modeled_tokens_avoided,
-            &730,
-            "gross modeled avoided tokens remains available",
-        )?;
-        require_eq(
-            &deduped.deduped_modeled_tokens_avoided,
-            &330,
-            "modeled avoided tokens are deduped by baseline",
-        )?;
-        require_eq(
-            &deduped.tokens_avoided,
-            &331,
-            "headline avoided tokens use measured plus deduped modeled",
-        )?;
-        require_eq(
-            &deduped.observed_file_read_replacements,
-            &1,
-            "deduped observed read replacements",
-        )?;
-        require_eq(
-            &deduped.modeled_file_reads_avoided,
-            &2,
-            "deduped raw search events remain likely file reads avoided",
-        )?;
-        require_eq(
-            &deduped.likely_file_reads_avoided,
-            &3,
-            "deduped likely file reads avoided",
-        )?;
-        require_eq(
-            &deduped.read_avoidance_confidence,
-            &READ_AVOIDANCE_CONFIDENCE_MODELED.to_string(),
-            "deduped read avoidance confidence",
-        )?;
-
-        store.record_usage(&usage_from_estimates_with_accounting(
-            "event-scoped",
-            "folders",
-            None,
-            Some("token".to_string()),
-            400,
-            40,
-            TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_CONFIDENCE_INFERRED,
-            TOKEN_ACCOUNTING_MODELED_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_DEDUPE_SCOPE_EVENT,
-        ))?;
-        store.record_usage(&usage_from_estimates_with_accounting(
-            "event-scoped",
-            "folders",
-            None,
-            Some("token".to_string()),
-            400,
-            30,
-            TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_CONFIDENCE_INFERRED,
-            TOKEN_ACCOUNTING_MODELED_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_DEDUPE_SCOPE_EVENT,
-        ))?;
-        let event_scoped = store.token_overview(Some("event-scoped"))?;
-        require_eq(
-            &event_scoped.gross_modeled_tokens_avoided,
-            &730,
-            "event-scoped gross modeled avoided tokens",
-        )?;
-        require_eq(
-            &event_scoped.deduped_modeled_tokens_avoided,
-            &730,
-            "event-scoped modeled events are not collapsed",
-        )?;
-        require_eq(
-            &event_scoped.repeated_baselines_deduped,
-            &0,
-            "event-scoped modeled events do not count as deduped repeats",
-        )?;
-        require_eq(
-            &event_scoped.likely_file_reads_avoided,
-            &0,
-            "folder navigation events do not count as likely file reads avoided",
-        )?;
-        require_eq(
-            &event_scoped.read_avoidance_confidence,
-            &READ_AVOIDANCE_CONFIDENCE_NOT_RECORDED.to_string(),
-            "folder navigation read avoidance confidence",
-        )?;
-
-        let mut negative_event = usage_from_estimates("negative", "outline", None, None, 20, 50);
-        negative_event.estimated_tokens_saved = Some(999);
-        store.record_usage(&negative_event)?;
         let negative = store.token_overview(Some("negative"))?;
         require_eq(&negative.calls, &1, "negative session call count")?;
-        require_eq(
-            &negative.estimated_saved,
-            &-30,
-            "negative session recomputed delta",
-        )?;
+        require_eq(&negative.saved_bytes, &-3, "negative measured delta")?;
         require_eq(
             &negative.savings_rate,
             &Some(-1.5),
             "negative session savings rate",
         )?;
 
-        let mut zero_event = usage_from_estimates("zero-baseline", "outline", None, None, 0, 12);
-        zero_event.estimated_tokens_saved = Some(999);
-        store.record_usage(&zero_event)?;
-        let zero_baseline = store.token_overview(Some("zero-baseline"))?;
-        require_eq(&zero_baseline.calls, &1, "zero baseline call count")?;
-        require_eq(
-            &zero_baseline.estimated_saved,
-            &-12,
-            "zero baseline recomputed delta",
-        )?;
-        require_eq(
-            &zero_baseline.savings_rate,
-            &None,
-            "zero baseline savings rate",
-        )?;
-
         let large_project = tempfile::tempdir()?;
         let mut large_store = AtlasStore::in_memory()?;
         large_store.set_project_root(large_project.path())?;
-        let maximum_estimate = usize::try_from(i64::MAX)?;
-        large_store.record_usage(&usage_from_estimates(
-            "large-primary",
-            "large",
-            None,
-            None,
-            maximum_estimate,
-            0,
-        ))?;
-        let Err(overflow) = large_store.record_usage(&usage_from_estimates(
-            "large-rejected",
-            "large",
-            None,
-            None,
-            maximum_estimate,
-            0,
-        )) else {
+        let maximum_size = usize::try_from(i64::MAX)?;
+        let mut large_event = usage_from_text("large-primary", "summary", None, None, "", "");
+        large_event.estimated_tokens_without_projectatlas = Some(maximum_size);
+        large_store.record_usage(&large_event)?;
+        large_event.session_id = "large-rejected".to_string();
+        let Err(overflow) = large_store.record_usage(&large_event) else {
             return Err(io::Error::other("overflowing telemetry aggregate was committed").into());
         };
         require_eq(
@@ -9295,7 +9151,7 @@ mod tests {
         )?;
         let large = large_store.token_overview(Some("large-primary"))?;
         require_eq(
-            &large.estimated_saved,
+            &large.saved_bytes,
             &isize::MAX,
             "largest accepted aggregate narrows at the public boundary",
         )?;
@@ -9388,9 +9244,9 @@ mod tests {
             "caller-label report spans both bounded instances",
         )?;
         require_eq(
-            &store.token_overview(None)?.estimated_saved,
-            &(isize::try_from(policy.max_baselines_per_instance + 1)? * 80),
-            "global totals remain exact across rotation",
+            &store.token_overview(None)?.excluded_unmeasured_calls,
+            &(policy.max_baselines_per_instance + 1),
+            "legacy rows remain counted but excluded across rotation",
         )?;
         require_eq(
             &matches!(
@@ -9444,75 +9300,42 @@ mod tests {
         let project = tempfile::tempdir()?;
         let mut store = AtlasStore::in_memory()?;
         store.set_project_root(project.path())?;
-        for (session, bucket, baseline_kind, confidence, without, with) in [
-            (
-                "session",
-                TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-                "selected_candidates",
-                "inferred",
-                100_usize,
-                25_usize,
-            ),
-            (
-                "session",
-                TOKEN_BUCKET_FULL_FILE_COMPRESSION,
-                "full_file",
-                "observed",
-                50_usize,
-                10_usize,
-            ),
-            (
-                "session",
-                TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-                "selected_candidates",
-                "inferred",
-                80_usize,
-                20_usize,
-            ),
-            (
-                "other",
-                TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-                "selected_candidates",
-                "inferred",
-                999_usize,
-                1_usize,
-            ),
-        ] {
-            store.record_usage(&usage_from_estimates_with_context(
-                session,
-                "trend",
-                None,
-                None,
-                without,
-                with,
-                bucket,
-                baseline_kind,
-                confidence,
-            ))?;
-        }
+        store.record_usage(&usage_from_output("session", "trend", None, None, "abcde"))?;
+        store.record_usage(&usage_from_text(
+            "session",
+            "trend",
+            None,
+            None,
+            "0123456789",
+            "01",
+        ))?;
+        store.record_usage(&usage_from_estimates(
+            "session", "trend", None, None, 80, 20,
+        ))?;
+        store.record_usage(&usage_from_output("other", "trend", None, None, "x"))?;
 
         let trends = store.token_trends(Some("session"), TokenTrendWindow::Day)?;
         require_eq(&trends.periods.len(), &1, "current daily period")?;
         require_eq(&trends.periods[0].calls, &3, "session trend call count")?;
         require_eq(
-            &trends.periods[0].estimated_saved,
-            &175,
-            "session trend saved tokens",
+            &trends.periods[0].measured_calls,
+            &2,
+            "session trend measured calls",
+        )?;
+        require_eq(
+            &trends.periods[0].saved_bytes,
+            &8,
+            "session trend saved bytes",
+        )?;
+        require_eq(
+            &trends.periods[0].output_bytes,
+            &7,
+            "session trend output bytes",
         )?;
         require_eq(
             &trends.periods[0].buckets.len(),
             &2,
-            "trend preserves evidence buckets",
-        )?;
-        require_eq(
-            &trends.periods[0].buckets[0].token_savings_bucket,
-            &TOKEN_BUCKET_FULL_FILE_COMPRESSION.to_string(),
-            "full-file bucket remains visible",
-        )?;
-        require_eq(
-            &trends.periods[0].buckets[0].confidence,
-            &"observed".to_string(),
-            "bucket confidence remains visible",
+            "trend keeps measured buckets only",
         )?;
         let all_labels = store.token_trends(None, TokenTrendWindow::Day)?;
         require_eq(&all_labels.periods.len(), &1, "all-label daily period")?;
