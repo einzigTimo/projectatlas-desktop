@@ -207,18 +207,21 @@ if ($errors.Count -gt 0) { throw 'Der Release-Wrapper kann fuer den Pakettest ni
             'rev-parse HEAD' { if ($script:gitScenario -eq 'head') { return ('b' * 40) }; return $testCommit }
             'status --porcelain --untracked-files=all' { if ($script:gitScenario -eq 'dirty') { return '?? fremde-arbeit.txt' }; return }
             'branch --show-current' { if ($script:gitScenario -eq 'branch') { return 'feature/test' }; return 'main' }
-            'fetch origin main:refs/remotes/origin/main --no-tags' { if ($script:gitScenario -eq 'fetch') { throw 'Git-Pruefung fuer das lokale Paket ist fehlgeschlagen.' }; return }
-            'rev-parse refs/remotes/origin/main' { if ($script:gitScenario -eq 'remote-head') { return ('b' * 40) }; return $testCommit }
-            'remote get-url origin' { if ($script:gitScenario -eq 'remote') { return 'https://github.com/other/projectatlas-desktop' }; return 'https://github.com/einzigTimo/projectatlas-desktop.git' }
+            'rev-parse refs/heads/main' {
+                if ($script:gitScenario -eq 'git-fail') { throw 'Git-Pruefung fuer das lokale Paket ist fehlgeschlagen.' }
+                if ($script:gitScenario -eq 'local-main') { return ('b' * 40) }; return $testCommit
+            }
             default { throw "Unerwarteter Git-Aufruf im Test: $command" }
         }
     }
     Assert-AtlasLocalBuildSource -Root 'synthetischer-root' -ExpectedCommit $testCommit
-    if (-not $script:gitCalls.Contains('fetch origin main:refs/remotes/origin/main --no-tags')) { throw 'origin/main wurde nicht aktuell und explizit abgefragt.' }
+    # GitHub ist kein Gate mehr: kein Remote, kein Fetch, kein ls-remote.
+    if (@($script:gitCalls | Where-Object { $_ -match 'fetch|remote|origin' }).Count -ne 0) { throw 'Die Quellbindung darf keinen Remote abfragen.' }
+    if (-not $script:gitCalls.Contains('rev-parse refs/heads/main')) { throw 'Der lokale main wurde nicht an den Commit gebunden.' }
     foreach ($case in @(
             @{ Mode = 'head'; Message = 'Quellcommit' }, @{ Mode = 'dirty'; Message = 'sauberen Quellstand' },
-            @{ Mode = 'branch'; Message = 'aus main' }, @{ Mode = 'fetch'; Message = 'Git-Pruefung' },
-            @{ Mode = 'remote-head'; Message = 'origin/main-Commit' }, @{ Mode = 'remote'; Message = 'Quellrepository' })) {
+            @{ Mode = 'branch'; Message = 'aus main' }, @{ Mode = 'git-fail'; Message = 'Git-Pruefung' },
+            @{ Mode = 'local-main'; Message = 'lokalen main-Commit' })) {
         $script:gitScenario = $case.Mode
         Assert-TestRejected -Action { Assert-AtlasLocalBuildSource -Root 'synthetischer-root' -ExpectedCommit $testCommit } -ExpectedMessage $case.Message -Scenario "Quellbindung $($case.Mode)"
     }

@@ -27,6 +27,13 @@ Assert-Test ($release.Contains('$legacySingleInvocationPublishEnabled = $false')
 $installerScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-ProjectAtlasDesktopLocal.ps1') -Raw
 Assert-Test ($installerScript.Contains('/S /UPDATE /NS /D=$install')) 'NSIS-Updateargumente muessen fest gebunden sein.'
 Assert-Test (-not ($installerScript -match '(?i)gh\s+release|workflow\s+run|git\s+push|truststore|certutil')) 'Lokaler Installer darf keine Veroeffentlichung und keinen Truststore-Import ausloesen.'
+# "GitHub raus aus allen Wegen" (18.09.2026): Der lokale Pfad fragt keinen Remote und kein gh ab.
+foreach ($name in @('ProjectAtlasLocalInstall.ps1','Install-ProjectAtlasDesktopLocal.ps1','Assert-ProjectAtlasDesktopInstalled.ps1','Prepare-ProjectAtlasDesktopLocal.ps1','../.github/scripts/ProjectAtlasLocalPackage.ps1')) {
+    $localPathScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot $name) -Raw
+    Assert-Test (-not ($localPathScript -match '(?i)ls-remote|git\S*\s.*\bfetch\b|''fetch''|refs/remotes/origin|remote\s+get-url|''remote''|&\s*gh\b|github\.com')) "Lokaler Updatepfad $name darf GitHub nicht als Gate verwenden."
+}
+$localSourceScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ProjectAtlasLocalInstall.ps1') -Raw
+Assert-Test ($localSourceScript.Contains('rev-parse refs/heads/main')) 'Lokale Quellbindung muss den lokalen main exakt an den Commit binden.'
 
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\','/')
 $testRoot = Join-Path $tempBase ('atlas-local-install-test-' + [Guid]::NewGuid().ToString('N'))

@@ -21,54 +21,42 @@ Agenten in diesem Repository. `CLAUDE.md` importiert ausschließlich diese Datei
 - Ein Feature-Branch-Push ist reine Quellcodeübertragung, solange er keinen produktiven Workflow
   auslöst. Er ist kein Deployment.
 
-## Einziger Release- und Deployweg
+## Einziger Auslieferungsweg: lokales Windows-Update
 
 Übergreifend gilt `%USERPROFILE%\Projects\Deployment-Controller\DEPLOY-RICHTLINIE.md`.
+Timo-Entscheidung 18.09.2026 „GitHub raus aus allen Wegen“: GitHub ist für Auslieferung und
+Betrieb kein Gate mehr. Push bleibt freiwillige Sicherung, nie Voraussetzung.
 
-- Jeder produktive Release von ProjectAtlas Desktop läuft ausschließlich über die Develop Zentrale,
-  Ziel `projectatlas-desktop/desktop-release/prod` mit der Ressourcenbindung
-  `github-release/projectatlas-desktop-releases`. Die Veröffentlichung und das persönliche lokale
-  Windows-Update sind bewusst getrennte Komponenten desselben Projekts: Ein Preflight der einen
-  autorisiert die andere nicht, und beide können nebeneinander registriert bleiben.
-- Umfasst der aktuelle Auftrag die Auslieferung, darf sie nach grünen Projekt-Gates ohne erneute
-  Chat-Rückfrage über den Controller-Helper
-  `%USERPROFILE%\Projects\Deployment-Controller\scripts\Request-CentralDeploy.ps1` mit dem Ziel
-  `projectatlas-desktop-release` persistent vorgemerkt werden. Die Zentrale prüft, startet seriell und
-  überwacht; sie ist keine zweite fachliche Freigabestufe. Umfasst der aktuelle Auftrag keine
-  Auslieferung, darf daraus keine Vormerkung abgeleitet werden.
-- Jede persistente Vormerkung ist an den kanonischen Controller-Root, die vollständige Zielidentität
-  `projectatlas-desktop/desktop-release/prod` und den exakten, bei der Vormerkung geprüften
-  `origin/main`-Commit gebunden sowie zeitlich begrenzt. Root-, Ziel- oder Commit-Drift und der
-  Ablauf der Attestierung stoppen fail-closed; für den neuen Stand ist eine neue Vormerkung nötig.
-- Kein direkter Aufruf von `.github/scripts/invoke-desktop-release.ps1 -Publish`, `gh workflow run`,
-  `gh release create/upload`, Produktiv-Tag-Push oder anderer Veröffentlichungsweg. Ein lokaler
-  Probebau ohne `-Publish` bleibt zulässig.
-- Die CLI/MCP-Veröffentlichung über `.github/workflows/release.yml` ist bis zu ihrer Einbindung in
-  die Develop Zentrale stillgelegt. Erlaubt sind dort nur nicht veröffentlichende Vorprüfungen;
-  weder Tags noch GitHub-Releases oder Assets dürfen aus dem Workflow publiziert werden.
-- Der Release-Wrapper muss bei `-Publish` ohne frisches, ziel- und commitgebundenes
-  Zentrale-Preflight-Artefakt fail-closed abbrechen. Die Zentrale darf nur einen sauberen, vollständig
-  gepushten `main`-Stand veröffentlichen.
-- Vor der Vormerkung müssen CI und projektspezifische Tests grün, der kanonische Controller-Checkout
-  sauber und aktuell, Versionen in `crates/projectatlas-desktop/Cargo.toml` und
-  `crates/projectatlas-desktop/tauri.conf.json` identisch sowie `RELEASE_NOTES.md` aktuell sein.
-- Installer, Signatur, Updater-Manifest und commitgebundene SHA-256-Provenienz müssen nach dem
-  Release live verifiziert werden. Ein Upload oder erfolgreicher Prozess allein ist kein
-  Produktivnachweis.
-- `-Publish` bleibt fail-closed blockiert, bis der Controller einen zweiphasigen Ablauf aus
-  privatem Draft, unabhängiger Clean-Windows-Attestierung und erst danach ausgeführter Promotion
-  implementiert. Eine Prüfung erst nach der öffentlichen Freigabe genügt nicht.
+- Der öffentliche Release `projectatlas-desktop/desktop-release/prod`
+  (`github-release/projectatlas-desktop-releases`) ist seit 18.09.2026 **stillgelegt** und in der
+  Zentrale nicht mehr registriert. Keine GitHub-Releases, keine Uploads, keine Produktiv-Tags.
+  Nicht ohne neuen ausdrücklichen Auftrag wieder aufnehmen.
+- Kein Aufruf von `.github/scripts/invoke-desktop-release.ps1 -Publish`, `gh workflow run`,
+  `gh release create/upload`, Produktiv-Tag-Push oder anderem Veröffentlichungsweg. Die
+  `-Publish`-Sperre im Wrapper bleibt fail-closed bestehen. Ein lokaler Probebau ohne `-Publish`
+  bleibt zulässig. `.github/workflows/release.yml` veröffentlicht nichts.
+- Umfasst der aktuelle Auftrag die Auslieferung, darf das lokale Update nach grünen Projekt-Gates
+  ohne erneute Chat-Rückfrage über
+  `%USERPROFILE%\Projects\Deployment-Controller\scripts\Request-CentralDeploy.ps1` persistent
+  vorgemerkt werden. Die Vormerkung ist an kanonischen Controller-Root, Zielidentität und exakten
+  lokalen Commit gebunden und zeitlich begrenzt; Drift oder Ablauf stoppen fail-closed.
 - Technische Plattform- und Systemfreigaben sowie die Fail-closed-Gates der Zentrale bleiben von der
   Regel „keine zweite Chat-Genehmigung“ unberührt.
 
 ## Persönliches lokales Windows-Update
 
-Der ausdrücklich beauftragte lokale Updateweg benötigt keinen zweiten Windows-Rechner. Er läuft
-weiterhin ausschließlich über die Develop Zentrale mit der Zielidentität
-`projectatlas-desktop/desktop-app/prod`, aber mit der eindeutigen lokalen Ressourcenbindung
-`local-windows/projectatlas-desktop-local`. Ein Preflight für `github-release` autorisiert ihn nicht.
+Der Updateweg benötigt keinen zweiten Windows-Rechner. Er läuft ausschließlich über die Develop
+Zentrale mit der Zielidentität `projectatlas-desktop/desktop-app/prod` und der lokalen
+Ressourcenbindung `local-windows/projectatlas-desktop-local`.
 
-- Nur sauberer, vollständig gepushter `main == origin/main` mit grüner CI für exakt diesen Commit.
+- Quelle ist ein sauberer lokaler `main`, dessen HEAD exakt dem gebundenen Commit entspricht. Kein
+  `git fetch`, kein `ls-remote`, kein `gh`, keine Remote-Prüfung; ein fehlender oder abweichender
+  Remote blockiert nicht.
+- An die Stelle der früheren GitHub-CI treten die lokalen Prechecks der Zentrale gegen exakt diesen
+  Commit: Quell-/Versionsbindung, `cargo fmt --check`, strict-strings-Lint, `cargo check`,
+  `clippy -D warnings` und Tests des Desktop-Crates sowie die projektlokalen PowerShell-Gate-Tests.
+- Versionen in `crates/projectatlas-desktop/Cargo.toml` und `tauri.conf.json` sind identisch,
+  `RELEASE_NOTES.md` nennt die Version.
 - Der letzte registrierte Precheck baut vor Ausstellung des kurzlebigen Preflights das Paket über
   `scripts/Prepare-ProjectAtlasDesktopLocal.ps1`. Ein Probebau installiert nichts.
 - Der registrierte `scripts/Install-ProjectAtlasDesktopLocal.ps1` aktualisiert ausschließlich die
@@ -84,11 +72,5 @@ weiterhin ausschließlich über die Develop Zentrale mit der Zielidentität
   unabhängig vom Build-Verzeichnis. Ein mit dem im Preflight gepinnten Zertifikat CMS-signiertes
   Manifest bindet Quelle, Rechner, Benutzer und sämtliche Paketdateien. Ein persistenter Beleg
   bindet zusätzlich Preflight und Backup.
-- Kein Upload, kein GitHub-Release und kein Produktiv-Tag in diesem lokalen Modus. Er ist keine
-  Freigabe zur Weitergabe an andere Rechner. Die öffentliche `-Publish`-Sperre bleibt bestehen.
-
-## Migrationsgrenze für öffentliche Veröffentlichungen
-
-Der Controller-Root darf erst von `ProjectAtlas-studio-hamburg` auf dieses Repository umgestellt
-werden, wenn die zentrale Härtung auf `main` gemergt, CI grün, der saubere Controller-Checkout
-synchronisiert und das Release-Ziel erreichbar ist. Bis dahin wird kein Desktop-Release vorgemerkt.
+- Kein Upload, kein GitHub-Release und kein Produktiv-Tag. Das Update ist keine Freigabe zur
+  Weitergabe an andere Rechner.

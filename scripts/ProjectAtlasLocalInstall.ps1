@@ -95,14 +95,10 @@ function Assert-AtlasLocalSource {
     if ($LASTEXITCODE -ne 0 -or ($head -join '').Trim() -cne $ExpectedCommit) { throw 'Quellcommit hat sich geaendert.' }
     $branch = @(& git -C $full branch --show-current 2>$null)
     if ($LASTEXITCODE -ne 0 -or ($branch -join '').Trim() -cne 'main') { throw 'Lokale Installation verlangt den geprueften main-Checkout.' }
-    $remote = @(& git -C $full remote get-url origin 2>$null)
-    if ($LASTEXITCODE -ne 0 -or ($remote -join '').Trim() -cnotmatch '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)einzigTimo/projectatlas-desktop(?:\.git)?/?$') {
-        throw 'Atlas-Quelle hat ein anderes Repository.'
-    }
-    $remoteHead = @(& git -C $full rev-parse refs/remotes/origin/main 2>$null)
-    if ($LASTEXITCODE -ne 0 -or ($remoteHead -join '').Trim() -cne $ExpectedCommit) { throw 'Lokaler main entspricht nicht dem geprueften origin/main.' }
-    $live = @(& git -c credential.interactive=never -C $full ls-remote --exit-code origin refs/heads/main 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $live.Count -ne 1 -or ($live[0] -split '\s+')[0] -cne $ExpectedCommit) { throw 'Live-origin/main entspricht nicht dem attestierten Quellcommit.' }
+    # "GitHub raus aus allen Wegen" (18.09.2026): sauberer lokaler main mit exakt gebundenem
+    # HEAD. Ein fehlender oder abweichender Remote blockiert nicht; kein Netzwerkzugriff.
+    $localMain = @(& git -C $full rev-parse refs/heads/main 2>$null)
+    if ($LASTEXITCODE -ne 0 -or ($localMain -join '').Trim() -cne $ExpectedCommit) { throw 'Lokaler main entspricht nicht dem attestierten Quellcommit.' }
     $state = @(& git -C $full status --porcelain --untracked-files=all 2>$null)
     if ($LASTEXITCODE -ne 0 -or $state.Count) { throw 'Quellarbeitsbaum ist nicht sauber.' }
     return [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($full))

@@ -35,13 +35,10 @@ function Assert-AtlasLocalBuildSource {
     if ($status) { throw 'Paketbau verlangt einen sauberen Quellstand.' }
     $branch = Invoke-AtlasLocalBuildGit -Root $Root -Arguments @('branch', '--show-current')
     if ($branch -cne 'main') { throw 'Das lokale Updatepaket muss aus main gebaut werden.' }
-    $remote = Invoke-AtlasLocalBuildGit -Root $Root -Arguments @('remote', 'get-url', 'origin')
-    if ($remote -cnotmatch '^(https://github\.com/|git@github\.com:)einzigTimo/projectatlas-desktop(\.git)?$') {
-        throw 'Paketbau verlangt das registrierte ProjectAtlas-Quellrepository.'
-    }
-    [void](Invoke-AtlasLocalBuildGit -Root $Root -Arguments @('fetch', 'origin', 'main:refs/remotes/origin/main', '--no-tags'))
-    $main = Invoke-AtlasLocalBuildGit -Root $Root -Arguments @('rev-parse', 'refs/remotes/origin/main')
-    if ($main -cne $ExpectedCommit) { throw 'Paketbau verlangt den aktuellen origin/main-Commit.' }
+    # "GitHub raus aus allen Wegen" (18.09.2026): Quelle ist ausschliesslich der saubere
+    # lokale main mit exakt gebundenem HEAD. Kein Remote, kein Fetch, kein gh.
+    $localMain = Invoke-AtlasLocalBuildGit -Root $Root -Arguments @('rev-parse', 'refs/heads/main')
+    if ($localMain -cne $ExpectedCommit) { throw 'Paketbau verlangt den exakt gebundenen lokalen main-Commit.' }
 }
 
 function Write-AtlasLocalNewText {
