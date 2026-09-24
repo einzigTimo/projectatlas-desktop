@@ -28,9 +28,9 @@ All props go to the original creator. My second project — be lenient :)
 
 ## About
 
-Every file not opened. Every folder not explored. ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph, reducing token costs by over 90%.
+ProjectAtlas guides coding agents with purpose metadata and an intelligent code graph so they can narrow before they read broadly.
 
-The "over 90%" figure is a workload-specific local estimate from the published audit, not a universal savings guarantee or provider-billing result; see [One Large-Application Audit](#one-large-application-audit).
+Token telemetry reports measured UTF-8 bytes only; a saving is shown only where the same call loaded the complete file. Summaries and slices shrink large-file reads; short lookups are often smaller with plain search.
 
 ProjectAtlas is a native Rust CLI and MCP server that keeps a project-local map of folders, files, reviewed purposes, deterministic summaries, symbols, graph relationships, searchable text, health findings, and token telemetry. `.gitignore`-aware scanning, BLAKE3 hashing, SQLite storage, filesystem watching, and compact TOON output keep repeated repository orientation local and fast.
 
@@ -124,7 +124,7 @@ See the [CLI/MCP capability guide](docs/agent-integration.md#mcp-tool-sequence),
 
 ## One Large-Application Audit
 
-The chart and table below describe one representative audit, not a universal savings constant. The default local estimator is `ceil(chars_or_bytes / 4)` and is separate from provider billing; measured source compression is reported separately from modeled navigation narrowing. The [audit report](docs/benchmarks/large-application-token-savings.md) owns the exact accounting rules.
+The chart and table below are a historical audit using modeled baselines, not measurements. The default local estimator is `ceil(chars_or_bytes / 4)` and is separate from provider billing; measured source compression is reported separately from modeled navigation narrowing. The [audit report](docs/benchmarks/large-application-token-savings.md) owns the exact accounting rules.
 
 <p align="center">
   <img src="docs/assets/token-savings-bar.svg" alt="One large-application audit: 221.1 million estimated tokens without ProjectAtlas and 0.4 million with ProjectAtlas across 142 calls" width="820">

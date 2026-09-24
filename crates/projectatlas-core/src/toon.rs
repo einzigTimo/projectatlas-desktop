@@ -3,7 +3,7 @@
 use crate::health::{HealthFinding, Severity};
 use crate::outline::FileOutline;
 use crate::symbols::{CodeSymbol, SymbolRelation};
-use crate::telemetry::{TokenOverview, TokenTrendReport};
+use crate::telemetry::{TokenBucketOverview, TokenOverview, TokenTrendReport};
 use crate::{IndexedNode, Overview, RankedNode};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -125,143 +125,87 @@ pub fn render_health(findings: &[HealthFinding]) -> String {
     encode_agent_payload(&json!({ "health_findings": rows }))
 }
 
-/// Render token savings overview as standard TOON.
+/// Render measured token telemetry as standard TOON.
+///
+/// Every size is an exact UTF-8 byte length. Savings appear only for calls that
+/// loaded a complete file in the same call; legacy heuristic or modeled rows are
+/// counted as excluded calls and never contribute sizes.
 #[must_use]
 pub fn render_token_overview(overview: &TokenOverview) -> String {
-    let savings_rate = percentage_label(overview.savings_rate);
-    let buckets = overview
-        .buckets
-        .iter()
-        .map(|bucket| {
-            json!({
-                "token_savings_bucket": bucket.token_savings_bucket,
-                "provider": bucket.provider,
-                "model": bucket.model,
-                "tokenizer_backend": bucket.tokenizer_backend,
-                "accuracy": bucket.accuracy,
-                "baseline_kind": bucket.baseline_kind,
-                "confidence": bucket.confidence,
-                "accounting_layer": bucket.accounting_layer,
-                "estimate_method": bucket.estimate_method,
-                "denominator_kind": bucket.denominator_kind,
-                "dedupe_scope": bucket.dedupe_scope,
-                "calls": bucket.calls,
-                "baseline_tokens": bucket.estimated_without_projectatlas,
-                "emitted_tokens": bucket.estimated_with_projectatlas,
-                "saved_tokens": bucket.estimated_saved,
-                "savings_rate": percentage_label(bucket.savings_rate),
-            })
-        })
-        .collect::<Vec<_>>();
     encode_agent_payload(&json!({
         "token_savings": {
-            "estimate_kind": overview.estimate_kind,
-            "estimator": overview.estimator,
-            "estimate_scope": overview.estimate_scope,
+            "unit": overview.unit,
+            "measurement": overview.measurement,
             "detail_availability": overview.detail_availability,
             "calls": overview.calls,
-            "estimated_without_projectatlas": overview.estimated_without_projectatlas,
-            "estimated_with_projectatlas": overview.estimated_with_projectatlas,
-            "estimated_saved": overview.estimated_saved,
-            "legacy_gross_estimated_saved": overview.legacy_gross_estimated_saved,
-            "measured_tokens_saved": overview.measured_tokens_saved,
-            "gross_modeled_tokens_avoided": overview.gross_modeled_tokens_avoided,
-            "deduped_modeled_tokens_avoided": overview.deduped_modeled_tokens_avoided,
-            "average_modeled_tokens_avoided": overview.average_modeled_tokens_avoided,
-            "average_tokens_avoided": overview.average_tokens_avoided,
-            "maximum_tokens_avoided": overview.maximum_tokens_avoided,
-            "tokens_avoided": overview.tokens_avoided,
-            "average_policy": {
-                "directory_walk_baseline_percent": overview.average_policy.directory_walk_baseline_percent,
-                "atlas_payload_percent": overview.average_policy.atlas_payload_percent,
-                "evidence": overview.average_policy.evidence.as_str(),
-            },
-            "repeated_baselines_deduped": overview.repeated_baselines_deduped,
-            "likely_file_reads_avoided": overview.likely_file_reads_avoided,
-            "read_avoidance": {
-                "likely_file_reads_avoided": overview.likely_file_reads_avoided,
-                "observed_file_read_replacements": overview.observed_file_read_replacements,
-                "modeled_file_reads_avoided": overview.modeled_file_reads_avoided,
-                "scope": overview.read_avoidance_scope,
-                "confidence": overview.read_avoidance_confidence,
-                "plain_language": "ProjectAtlas summaries, search results, and slices were used instead of opening likely whole files.",
+            "measured_calls": overview.measured_calls,
+            "excluded_unmeasured_calls": overview.excluded_unmeasured_calls,
+            "output_bytes": overview.output_bytes,
+            "full_file_comparison": {
+                "basis": overview.savings_basis,
+                "calls": overview.compared_calls,
+                "source_bytes": overview.compared_source_bytes,
+                "output_bytes": overview.compared_output_bytes,
+                "saved_bytes": overview.saved_bytes,
+                "savings_rate": percentage_label(overview.savings_rate),
             },
             "agent_efficiency": overview.agent_efficiency,
             "calibration": overview.calibration,
-            "savings_rate": savings_rate,
-            "totals": {
-                "baseline_tokens": overview.estimated_without_projectatlas,
-                "emitted_tokens": overview.estimated_with_projectatlas,
-                "saved_tokens": overview.estimated_saved,
-                "legacy_gross_saved_tokens": overview.legacy_gross_estimated_saved,
-                "measured_saved_tokens": overview.measured_tokens_saved,
-                "gross_modeled_avoided_tokens": overview.gross_modeled_tokens_avoided,
-                "deduped_modeled_avoided_tokens": overview.deduped_modeled_tokens_avoided,
-                "average_modeled_avoided_tokens": overview.average_modeled_tokens_avoided,
-                "average_tokens_avoided": overview.average_tokens_avoided,
-                "maximum_tokens_avoided": overview.maximum_tokens_avoided,
-                "tokens_avoided": overview.tokens_avoided,
-                "likely_file_reads_avoided": overview.likely_file_reads_avoided,
-                "savings_rate": savings_rate,
-            },
-            "buckets": buckets,
+            "buckets": token_bucket_rows(&overview.buckets),
         }
     }))
 }
 
-/// Render token savings trends as standard TOON.
+/// Render measured token telemetry trends as standard TOON.
 #[must_use]
 pub fn render_token_trends(report: &TokenTrendReport) -> String {
     let periods = report
         .periods
         .iter()
         .map(|period| {
-            let buckets = period
-                .buckets
-                .iter()
-                .map(|bucket| {
-                    json!({
-                        "token_savings_bucket": bucket.token_savings_bucket,
-                        "provider": bucket.provider,
-                        "model": bucket.model,
-                        "tokenizer_backend": bucket.tokenizer_backend,
-                        "accuracy": bucket.accuracy,
-                        "baseline_kind": bucket.baseline_kind,
-                        "confidence": bucket.confidence,
-                        "accounting_layer": bucket.accounting_layer,
-                        "estimate_method": bucket.estimate_method,
-                        "denominator_kind": bucket.denominator_kind,
-                        "dedupe_scope": bucket.dedupe_scope,
-                        "calls": bucket.calls,
-                        "baseline_tokens": bucket.estimated_without_projectatlas,
-                        "emitted_tokens": bucket.estimated_with_projectatlas,
-                        "saved_tokens": bucket.estimated_saved,
-                        "savings_rate": percentage_label(bucket.savings_rate),
-                    })
-                })
-                .collect::<Vec<_>>();
             json!({
                 "period": period.period,
                 "calls": period.calls,
-                "baseline_tokens": period.estimated_without_projectatlas,
-                "emitted_tokens": period.estimated_with_projectatlas,
-                "saved_tokens": period.estimated_saved,
+                "measured_calls": period.measured_calls,
+                "output_bytes": period.output_bytes,
+                "compared_calls": period.compared_calls,
+                "compared_source_bytes": period.compared_source_bytes,
+                "compared_output_bytes": period.compared_output_bytes,
+                "saved_bytes": period.saved_bytes,
                 "savings_rate": percentage_label(period.savings_rate),
-                "buckets": buckets,
+                "buckets": token_bucket_rows(&period.buckets),
             })
         })
         .collect::<Vec<_>>();
     encode_agent_payload(&json!({
         "token_trends": {
-            "estimate_kind": report.estimate_kind,
-            "estimator": report.estimator,
-            "estimate_scope": report.estimate_scope,
+            "unit": report.unit,
+            "measurement": report.measurement,
+            "savings_basis": report.savings_basis,
             "session": report.session.as_deref().unwrap_or("all sessions"),
             "window": report.window,
             "detail_availability": report.detail_availability,
             "periods": periods,
         }
     }))
+}
+
+/// Project measured buckets into stable agent-facing rows.
+fn token_bucket_rows(buckets: &[TokenBucketOverview]) -> Vec<Value> {
+    buckets
+        .iter()
+        .map(|bucket| {
+            json!({
+                "bucket": bucket.token_savings_bucket,
+                "baseline_kind": bucket.baseline_kind,
+                "calls": bucket.calls,
+                "source_bytes": bucket.source_bytes,
+                "output_bytes": bucket.output_bytes,
+                "saved_bytes": bucket.saved_bytes.map_or_else(|| json!("n/a"), |saved| json!(saved)),
+                "savings_rate": percentage_label(bucket.savings_rate),
+            })
+        })
+        .collect()
 }
 
 /// Render symbols as standard TOON.
@@ -371,8 +315,9 @@ mod tests {
     use super::{encode_agent_payload, render_symbols, render_token_overview, render_token_trends};
     use crate::symbols::{CodeSymbol, ParserKind, SymbolKind};
     use crate::telemetry::{
-        TOKEN_BASELINE_DIRECTORY_WALK, TokenOverview, TokenTrendReport, TokenTrendWindow,
-        UsageDetailAvailability, usage_from_estimates, usage_from_text,
+        TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_REPORT_SAVINGS_BASIS, TokenOverview, TokenTrendReport,
+        TokenTrendWindow, UsageDetailAvailability, usage_from_estimates, usage_from_output,
+        usage_from_text,
     };
     use serde_json::{Value, json};
 
@@ -418,71 +363,51 @@ mod tests {
     }
 
     #[test]
-    fn renders_token_overview_with_read_avoidance_section() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let mut folder = usage_from_estimates("s", "folders", None, None, 101, 20);
+    fn renders_token_overview_with_measured_bytes_only() -> Result<(), Box<dyn std::error::Error>> {
+        let mut folder = usage_from_estimates("s", "folders", None, None, 1_000_000, 20);
         folder.denominator_kind = TOKEN_BASELINE_DIRECTORY_WALK.to_string();
         let overview = TokenOverview::from_events(&[
             usage_from_text("s", "summary", None, None, "abcdefghijkl", "abcd"),
+            usage_from_output("s", "search", None, Some("q".to_string()), "hit"),
             usage_from_estimates("s", "search", None, None, 100, 20),
             folder,
         ]);
         let toon = render_token_overview(&overview);
+        for forbidden in [
+            "directory_walk",
+            "policy_estimate",
+            "modeled",
+            "average",
+            "maximum",
+            "tokens_avoided",
+            "likely_file_reads",
+        ] {
+            if toon.contains(forbidden) {
+                return Err(format!("token TOON contains {forbidden}:\n{toon}").into());
+            }
+        }
         let decoded: Value = toon_format::decode_default(&toon)?;
         let token_savings = &decoded["token_savings"];
-
+        require_json_eq(&token_savings["unit"], &json!("utf8_bytes"), "unit")?;
+        require_json_eq(&token_savings["calls"], &json!(4), "all calls")?;
         require_json_eq(
-            &token_savings["average_tokens_avoided"],
-            &json!(overview.average_tokens_avoided),
-            "average tokens avoided",
-        )?;
-        require_json_eq(
-            &token_savings["maximum_tokens_avoided"],
-            &json!(overview.maximum_tokens_avoided),
-            "maximum tokens avoided",
-        )?;
-        require_json_eq(
-            &token_savings["tokens_avoided"],
-            &token_savings["average_tokens_avoided"],
-            "primary average compatibility alias",
-        )?;
-        require_json_eq(
-            &token_savings["average_policy"]["directory_walk_baseline_percent"],
-            &json!(50),
-            "average directory-walk policy",
-        )?;
-
-        require_json_eq(
-            &token_savings["likely_file_reads_avoided"],
+            &token_savings["measured_calls"],
             &json!(2),
-            "top-level read avoidance",
+            "measured calls",
         )?;
         require_json_eq(
-            &token_savings["read_avoidance"]["likely_file_reads_avoided"],
+            &token_savings["excluded_unmeasured_calls"],
             &json!(2),
-            "section read avoidance",
+            "excluded legacy calls",
         )?;
+        require_json_eq(&token_savings["output_bytes"], &json!(7), "output bytes")?;
+        let comparison = &token_savings["full_file_comparison"];
+        require_json_eq(&comparison["source_bytes"], &json!(12), "source bytes")?;
+        require_json_eq(&comparison["saved_bytes"], &json!(8), "saved bytes")?;
         require_json_eq(
-            &token_savings["read_avoidance"]["observed_file_read_replacements"],
-            &json!(1),
-            "observed read replacements",
-        )?;
-        require_json_eq(
-            &token_savings["read_avoidance"]["modeled_file_reads_avoided"],
-            &json!(1),
-            "modeled read avoidance",
-        )?;
-        require_json_eq(
-            &token_savings["totals"]["likely_file_reads_avoided"],
-            &json!(2),
-            "total read avoidance",
-        )?;
-        require_json_eq(
-            &token_savings["read_avoidance"]["plain_language"],
-            &json!(
-                "ProjectAtlas summaries, search results, and slices were used instead of opening likely whole files."
-            ),
-            "plain language read avoidance",
+            &comparison["basis"],
+            &json!(TOKEN_REPORT_SAVINGS_BASIS),
+            "savings basis",
         )?;
         Ok(())
     }

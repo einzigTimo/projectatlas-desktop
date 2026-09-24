@@ -14,26 +14,24 @@ use crate::runtime::{
     ProjectWorktreeRequired, PurposeCuratorHandoff, PurposeLintLevel, PurposeReviewRequest,
     ResetIndexReport, ScanReport, ScanRuntimePlan, SettingsClassifiedNavigationReport,
     SourceObservationRegistry, SymbolBuildOptions, UsageRuntimeInstance, VerifiedReadOutcome,
-    VerifiedReadStamp, build_settings_report, byte_count_to_tokens, canonical_project_root,
+    VerifiedReadStamp, build_settings_report, canonical_project_root,
     canonical_source_project_root, classified_navigation_capabilities,
     classified_ranked_file_nodes_with_reasons, config_root_mismatch_error,
-    default_mcp_project_root, estimated_source_tokens_for_indexed_files,
-    estimated_source_tokens_for_paths, federated_worktree_error, index_init_required,
-    index_work_control, init_config_path, init_next_steps, lint_project,
-    load_synchronized_repository_token_report, next_step_report_payload,
-    next_step_report_with_selection, normalized_folder_filter, open_atlas_store_for_project,
-    open_atlas_store_read_only_for_project, open_federated_atlas_stores_for_project,
-    purpose_curation_page, purpose_curator_handoff, ranked_file_nodes_with_reasons,
-    ranked_folder_nodes_with_reasons, read_indexed_file_content,
-    reconcile_hydrated_index_controlled, record_directory_walk_usage_estimate,
-    record_usage_estimate, record_usage_text, render_classified_ranked_file_rows,
-    render_classified_symbol_rows, render_health_page, render_purpose_curation_page,
-    render_purpose_review_report, require_current_worktree_usage_snapshot,
-    require_registered_worktree_lifecycle, reset_index_files, reset_index_files_with_revalidation,
-    review_purposes, run_init_bootstrap, run_init_bootstrap_with_host_configs,
-    run_scan_pipeline_controlled, run_single_watch_refresh_controlled,
-    run_symbol_build_pipeline_controlled, strip_legacy_purpose, telemetry_disabled,
-    validate_purpose_review_admission, validated_indexed_file_key, watcher_status_report,
+    default_mcp_project_root, federated_worktree_error, index_init_required, index_work_control,
+    init_config_path, init_next_steps, lint_project, load_synchronized_repository_token_report,
+    next_step_report_payload, next_step_report_with_selection, normalized_folder_filter,
+    open_atlas_store_for_project, open_atlas_store_read_only_for_project,
+    open_federated_atlas_stores_for_project, purpose_curation_page, purpose_curator_handoff,
+    ranked_file_nodes_with_reasons, ranked_folder_nodes_with_reasons, read_indexed_file_content,
+    reconcile_hydrated_index_controlled, record_usage_output, record_usage_text,
+    render_classified_ranked_file_rows, render_classified_symbol_rows, render_health_page,
+    render_purpose_curation_page, render_purpose_review_report,
+    require_current_worktree_usage_snapshot, require_registered_worktree_lifecycle,
+    reset_index_files, reset_index_files_with_revalidation, review_purposes, run_init_bootstrap,
+    run_init_bootstrap_with_host_configs, run_scan_pipeline_controlled,
+    run_single_watch_refresh_controlled, run_symbol_build_pipeline_controlled,
+    strip_legacy_purpose, telemetry_disabled, validate_purpose_review_admission,
+    validated_indexed_file_key, watcher_status_report,
 };
 #[cfg(test)]
 use crate::runtime::{
@@ -65,9 +63,7 @@ use projectatlas_core::language::{ContentClassification, ContentSelection};
 use projectatlas_core::outline::build_outline;
 use projectatlas_core::symbols::ParserKind;
 use projectatlas_core::telemetry::{
-    TOKEN_BASELINE_DIRECTORY_WALK, TOKEN_BASELINE_SELECTED_CANDIDATES,
-    TOKEN_BUCKET_NAVIGATION_AVOIDANCE, TOKEN_CONFIDENCE_INFERRED, TOKEN_CONFIDENCE_POLICY_ESTIMATE,
-    TokenTrendWindow, UsageInstanceOwner, usage_from_estimates_with_context, usage_from_text,
+    TokenTrendWindow, UsageInstanceOwner, usage_from_output, usage_from_text,
 };
 use projectatlas_core::toon::{
     encode_agent_payload, render_outline, render_overview, render_ranked_nodes,
@@ -307,8 +303,6 @@ const MCP_SETTINGS_RESPONSE_LIMIT_PREFIX: &str = "settings response requires ";
 const MCP_SETTINGS_RESPONSE_LIMIT_SEPARATOR: &str = " bytes, exceeding the ";
 /// Suffix for an oversized settings-response diagnostic.
 const MCP_SETTINGS_RESPONSE_LIMIT_SUFFIX: &str = "-byte diagnostic limit";
-/// Maximum generation/filter token baselines retained by one MCP process.
-const MCP_SOURCE_TOKEN_BASELINE_LIMIT: usize = 128;
 /// Default MCP config server key.
 const MCP_DEFAULT_CONFIG_SERVER_NAME: &str = "projectatlas";
 /// Recovery guidance when a path names a subfolder rather than another selected root.
@@ -1586,19 +1580,6 @@ struct McpUsageProjectBinding {
     worktree_registration_id: Option<i64>,
 }
 
-/// One bounded broad-source token baseline keyed to a complete generation.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct McpSourceTokenBaselineKey {
-    /// Exact project binding whose source files supplied the baseline.
-    binding: McpUsageProjectBinding,
-    /// Complete publication generation represented by the baseline.
-    generation: projectatlas_core::IndexGeneration,
-    /// Optional repository folder filter applied to the baseline.
-    folder: Option<String>,
-    /// Optional repository file-pattern filter applied to the baseline.
-    file_pattern: Option<String>,
-}
-
 /// Deferred telemetry payload recorded only after a verified result is accepted.
 #[derive(Debug)]
 struct McpUsageIntent {
@@ -1608,49 +1589,27 @@ struct McpUsageIntent {
     path: Option<String>,
     /// Optional caller query.
     query: Option<String>,
-    /// Baseline used by the existing usage accounting contract.
+    /// Measured counterpart of the accepted response, if any.
     baseline: McpUsageBaseline,
 }
 
-/// Existing telemetry baseline variants retained across verified-read acceptance.
+/// Measured telemetry variants retained across verified-read acceptance.
 #[derive(Debug)]
 enum McpUsageBaseline {
-    /// Modeled selected-candidate token count.
-    Estimate(usize),
-    /// Modeled avoided directory-walk token count.
-    DirectoryWalk(usize),
-    /// Exact source text replaced by the accepted response.
+    /// Only the emitted output is measured; no counterpart exists.
+    Output,
+    /// Complete source file loaded by the same call and compared with the response.
     Text(String),
 }
 
 impl McpUsageIntent {
-    /// Defer one selected-candidate token estimate until result acceptance.
-    fn estimate(
-        command: &'static str,
-        path: Option<String>,
-        query: Option<String>,
-        baseline_tokens: usize,
-    ) -> Self {
+    /// Defer one output-size measurement until result acceptance.
+    fn output(command: &'static str, path: Option<String>, query: Option<String>) -> Self {
         Self {
             command,
             path,
             query,
-            baseline: McpUsageBaseline::Estimate(baseline_tokens),
-        }
-    }
-
-    /// Defer one avoided directory-walk estimate until result acceptance.
-    fn directory_walk(
-        command: &'static str,
-        path: Option<String>,
-        query: Option<String>,
-        baseline_tokens: usize,
-    ) -> Self {
-        Self {
-            command,
-            path,
-            query,
-            baseline: McpUsageBaseline::DirectoryWalk(baseline_tokens),
+            baseline: McpUsageBaseline::Output,
         }
     }
 
@@ -1709,8 +1668,6 @@ struct McpUsageProjectRuntime {
 struct McpUsageRuntime {
     /// Distinct selected-project identities owned by this MCP process.
     entries: Vec<McpUsageProjectRuntime>,
-    /// Bounded modeled baselines reused without decoding every indexed file per call.
-    source_token_baselines: VecDeque<(McpSourceTokenBaselineKey, usize)>,
 }
 
 impl McpUsageRuntime {
@@ -1776,28 +1733,6 @@ impl McpUsageRuntime {
     /// Clone the bounded project/runtime set before shutdown database I/O.
     fn snapshot(&self) -> Vec<McpUsageProjectRuntime> {
         self.entries.clone()
-    }
-
-    /// Return a cached generation-bound broad-source token baseline.
-    fn source_token_baseline(&self, key: &McpSourceTokenBaselineKey) -> Option<usize> {
-        self.source_token_baselines
-            .iter()
-            .find_map(|(candidate, value)| (candidate == key).then_some(*value))
-    }
-
-    /// Retain one baseline without allowing arbitrary filter keys to grow memory.
-    fn insert_source_token_baseline(&mut self, key: McpSourceTokenBaselineKey, value: usize) {
-        if let Some(index) = self
-            .source_token_baselines
-            .iter()
-            .position(|(candidate, _value)| candidate == &key)
-        {
-            let _removed = self.source_token_baselines.remove(index);
-        }
-        while self.source_token_baselines.len() >= MCP_SOURCE_TOKEN_BASELINE_LIMIT {
-            let _removed = self.source_token_baselines.pop_front();
-        }
-        self.source_token_baselines.push_back((key, value));
     }
 }
 
@@ -4272,30 +4207,13 @@ impl ProjectAtlasMcpServer {
                 return;
             };
             let event = match &intent.baseline {
-                McpUsageBaseline::Estimate(baseline_tokens) => usage_from_estimates_with_context(
+                McpUsageBaseline::Output => usage_from_output(
                     &self.session,
                     intent.command,
                     intent.path.clone(),
                     intent.query.clone(),
-                    *baseline_tokens,
-                    projectatlas_core::outline::estimate_tokens(output),
-                    TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-                    TOKEN_BASELINE_SELECTED_CANDIDATES,
-                    TOKEN_CONFIDENCE_INFERRED,
+                    output,
                 ),
-                McpUsageBaseline::DirectoryWalk(baseline_tokens) => {
-                    usage_from_estimates_with_context(
-                        &self.session,
-                        intent.command,
-                        intent.path.clone(),
-                        intent.query.clone(),
-                        *baseline_tokens,
-                        projectatlas_core::outline::estimate_tokens(output),
-                        TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-                        TOKEN_BASELINE_DIRECTORY_WALK,
-                        TOKEN_CONFIDENCE_POLICY_ESTIMATE,
-                    )
-                }
                 McpUsageBaseline::Text(baseline_text) => usage_from_text(
                     &self.session,
                     intent.command,
@@ -4324,28 +4242,15 @@ impl ProjectAtlasMcpServer {
             return;
         }
         self.record_usage_for_state(state, &store, |usage_instance| match &intent.baseline {
-            McpUsageBaseline::Estimate(baseline_tokens) => record_usage_estimate(
+            McpUsageBaseline::Output => record_usage_output(
                 &store,
                 Some(usage_instance),
                 &self.session,
                 intent.command,
                 intent.path.clone(),
                 intent.query.clone(),
-                *baseline_tokens,
                 output,
             ),
-            McpUsageBaseline::DirectoryWalk(baseline_tokens) => {
-                record_directory_walk_usage_estimate(
-                    &store,
-                    Some(usage_instance),
-                    &self.session,
-                    intent.command,
-                    intent.path.clone(),
-                    intent.query.clone(),
-                    *baseline_tokens,
-                    output,
-                )
-            }
             McpUsageBaseline::Text(baseline_text) => record_usage_text(
                 &store,
                 Some(usage_instance),
@@ -4357,41 +4262,6 @@ impl ProjectAtlasMcpServer {
                 output,
             ),
         });
-    }
-
-    /// Reuse an optional broad-source telemetry baseline within one complete generation.
-    fn estimated_source_tokens_cached(
-        &self,
-        state: &McpProjectState,
-        store: &AtlasStore,
-        stamp: &VerifiedReadStamp,
-        folder: Option<&str>,
-        file_pattern: Option<&str>,
-    ) -> Result<usize, CliError> {
-        let key = McpSourceTokenBaselineKey {
-            binding: McpUsageProjectBinding {
-                root: state.root.clone(),
-                db_path: state.db_path.clone(),
-                project_instance_id: stamp.project_instance_id,
-                worktree_registration_id: None,
-            },
-            generation: stamp.generation,
-            folder: folder.map(ToOwned::to_owned),
-            file_pattern: file_pattern.map(ToOwned::to_owned),
-        };
-        if let Some(value) = self
-            .usage_runtime
-            .lock()
-            .ok()
-            .and_then(|runtime| runtime.source_token_baseline(&key))
-        {
-            return Ok(value);
-        }
-        let value = estimated_source_tokens_for_indexed_files(store, folder, file_pattern)?;
-        if let Ok(mut runtime) = self.usage_runtime.lock() {
-            runtime.insert_source_token_baseline(key, value);
-        }
-        Ok(value)
     }
 
     /// Best-effort seal each selected project's current identity at shutdown.
@@ -8451,20 +8321,11 @@ impl ProjectAtlasMcpServer {
     ) -> McpToolTextResult {
         Self::as_mcp_text((|| {
             let state = self.state_for_target(params.project_path, params.worktree)?;
-            self.with_fresh_string_and_usage_for_request(&state, context, |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, context, |store, _stamp| {
                 let overview = store.overview()?;
                 let toon = render_overview(&overview);
                 let usage = Self::telemetry_enabled()
-                    .then(|| self.estimated_source_tokens_cached(&state, store, &stamp, None, None))
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::directory_walk(
-                            MCP_EVENT_ATLAS_OVERVIEW,
-                            None,
-                            None,
-                            baseline_tokens,
-                        )
-                    });
+                    .then(|| McpUsageIntent::output(MCP_EVENT_ATLAS_OVERVIEW, None, None));
                 Ok((toon, usage))
             })
         })())
@@ -8505,21 +8366,13 @@ impl ProjectAtlasMcpServer {
         Self::as_mcp_text((|| {
             let state = self.state_for_target(params.project_path, params.worktree)?;
             let query = Self::query_or_empty(params.query);
-            self.with_fresh_string_and_usage_for_request(&state, context, |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, context, |store, _stamp| {
                 let selected =
                     ranked_folder_nodes_with_reasons(store, &query, params.limit.unwrap_or(10))?;
                 let toon = render_ranked_nodes(NODE_LABEL_FOLDERS, &selected);
-                let usage = Self::telemetry_enabled()
-                    .then(|| self.estimated_source_tokens_cached(&state, store, &stamp, None, None))
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::directory_walk(
-                            MCP_EVENT_ATLAS_FOLDERS,
-                            None,
-                            Some(query.clone()),
-                            baseline_tokens,
-                        )
-                    });
+                let usage = Self::telemetry_enabled().then(|| {
+                    McpUsageIntent::output(MCP_EVENT_ATLAS_FOLDERS, None, Some(query.clone()))
+                });
                 Ok((toon, usage))
             })
         })())
@@ -8554,7 +8407,7 @@ impl ProjectAtlasMcpServer {
                 nearest_project,
             )?;
             let query = Self::query_or_empty(params.query);
-            self.with_fresh_string_and_usage_for_request(&state, context, |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, context, |store, _stamp| {
                 let selected = classified_ranked_file_nodes_with_reasons(
                     store,
                     &query,
@@ -8571,28 +8424,16 @@ impl ProjectAtlasMcpServer {
                         NODE_LABEL_FILES: render_classified_ranked_file_rows(&selected),
                     })),
                 )?;
-                let usage = Self::telemetry_enabled()
-                    .then(|| {
-                        self.estimated_source_tokens_cached(
-                            &state,
-                            store,
-                            &stamp,
-                            folder_filter.as_deref(),
-                            params.file_pattern.as_deref(),
-                        )
-                    })
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::estimate(
-                            MCP_EVENT_ATLAS_FILES,
-                            params
-                                .file_pattern
-                                .clone()
-                                .or_else(|| folder_filter.clone()),
-                            Some(query.clone()),
-                            baseline_tokens,
-                        )
-                    });
+                let usage = Self::telemetry_enabled().then(|| {
+                    McpUsageIntent::output(
+                        MCP_EVENT_ATLAS_FILES,
+                        params
+                            .file_pattern
+                            .clone()
+                            .or_else(|| folder_filter.clone()),
+                        Some(query.clone()),
+                    )
+                });
                 Ok((toon, usage))
             })
         })())
@@ -8612,7 +8453,7 @@ impl ProjectAtlasMcpServer {
             let content_selection = parse_content_selection(params.content_selection.as_deref())?;
             let state = self.state_for_target(params.project_path, params.worktree)?;
             let query = Self::query_or_empty(params.query);
-            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, _stamp| {
                 let report = next_step_report_with_selection(
                     store,
                     &query,
@@ -8621,17 +8462,9 @@ impl ProjectAtlasMcpServer {
                 )?;
                 let payload = next_step_report_payload(&report);
                 let toon = Self::encode_named_payload(MCP_PAYLOAD_NEXT, &payload)?;
-                let usage = Self::telemetry_enabled()
-                    .then(|| self.estimated_source_tokens_cached(&state, store, &stamp, None, None))
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::directory_walk(
-                            MCP_EVENT_ATLAS_NEXT,
-                            None,
-                            Some(query.clone()),
-                            baseline_tokens,
-                        )
-                    });
+                let usage = Self::telemetry_enabled().then(|| {
+                    McpUsageIntent::output(MCP_EVENT_ATLAS_NEXT, None, Some(query.clone()))
+                });
                 Ok((toon, usage))
             })
         })())
@@ -8772,11 +8605,10 @@ impl ProjectAtlasMcpServer {
                         Some(control),
                     )?;
                     let toon = render_search_report(&report);
-                    let usage = Some(McpUsageIntent::estimate(
+                    let usage = Some(McpUsageIntent::output(
                         MCP_EVENT_ATLAS_SEARCH,
                         params.file_pattern.clone(),
                         Some(params.pattern.clone()),
-                        byte_count_to_tokens(report.searched_bytes),
                     ));
                     Ok((toon, usage))
                 },
@@ -8982,24 +8814,13 @@ impl ProjectAtlasMcpServer {
                         NODE_LABEL_SYMBOLS: render_classified_symbol_rows(&symbols),
                     })),
                 )?;
-                let usage = Self::telemetry_enabled()
-                    .then(|| {
-                        estimated_source_tokens_for_paths(
-                            store,
-                            symbols
-                                .iter()
-                                .map(|classified| classified.symbol.path.as_str()),
-                        )
-                    })
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::estimate(
-                            MCP_EVENT_ATLAS_SYMBOLS,
-                            file.clone(),
-                            params.query.clone(),
-                            baseline_tokens,
-                        )
-                    });
+                let usage = Self::telemetry_enabled().then(|| {
+                    McpUsageIntent::output(
+                        MCP_EVENT_ATLAS_SYMBOLS,
+                        file.clone(),
+                        params.query.clone(),
+                    )
+                });
                 Ok((toon, usage))
             })
         })())
@@ -9138,19 +8959,13 @@ impl ProjectAtlasMcpServer {
         };
         let usage = matches!(&stores, SymbolRelationStores::Single(_))
             .then(|| {
-                Self::telemetry_enabled()
-                    .then(|| {
-                        estimated_source_tokens_for_paths(primary, std::iter::once(file.as_str()))
-                    })
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::estimate(
-                            MCP_EVENT_ATLAS_SYMBOL_RELATIONS,
-                            Some(file.clone()),
-                            params.symbol.clone(),
-                            baseline_tokens,
-                        )
-                    })
+                Self::telemetry_enabled().then(|| {
+                    McpUsageIntent::output(
+                        MCP_EVENT_ATLAS_SYMBOL_RELATIONS,
+                        Some(file.clone()),
+                        params.symbol.clone(),
+                    )
+                })
             })
             .flatten();
 
@@ -9439,22 +9254,13 @@ impl ProjectAtlasMcpServer {
                         routed_project,
                         render_symbol_relations(&relations),
                     )?;
-                    let usage = Self::telemetry_enabled()
-                        .then(|| {
-                            estimated_source_tokens_for_paths(
-                                store,
-                                relations.iter().map(|relation| relation.path.as_str()),
-                            )
-                        })
-                        .and_then(Result::ok)
-                        .map(|baseline_tokens| {
-                            McpUsageIntent::estimate(
-                                MCP_EVENT_ATLAS_SYMBOL_RELATIONS,
-                                file.clone(),
-                                params.query.clone(),
-                                baseline_tokens,
-                            )
-                        });
+                    let usage = Self::telemetry_enabled().then(|| {
+                        McpUsageIntent::output(
+                            MCP_EVENT_ATLAS_SYMBOL_RELATIONS,
+                            file.clone(),
+                            params.query.clone(),
+                        )
+                    });
                     Ok((toon, usage))
                 },
             )
@@ -9492,25 +9298,12 @@ impl ProjectAtlasMcpServer {
                 return self.with_fresh_string_and_usage_controlled_for_request(
                     &state,
                     Some(context),
-                    |store, stamp, control| {
+                    |store, _stamp, control| {
                         let mut report =
                             load_coverage_discovery_controlled(store, query.clone(), control)?;
                         let toon = finalize_coverage_output(OutputFormat::Toon, &mut report)?;
                         let usage = Self::telemetry_enabled()
-                            .then(|| {
-                                self.estimated_source_tokens_cached(
-                                    &state, store, &stamp, None, None,
-                                )
-                            })
-                            .and_then(Result::ok)
-                            .map(|baseline_tokens| {
-                                McpUsageIntent::directory_walk(
-                                    MCP_EVENT_ATLAS_HEALTH,
-                                    None,
-                                    None,
-                                    baseline_tokens,
-                                )
-                            });
+                            .then(|| McpUsageIntent::output(MCP_EVENT_ATLAS_HEALTH, None, None));
                         Ok((toon, usage))
                     },
                 );
@@ -9526,20 +9319,11 @@ impl ProjectAtlasMcpServer {
                 HealthScope::all()
             };
             let query = health_query_from_params(&params, scope)?;
-            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, _stamp| {
                 let page = store.unresolved_health_findings_page_current(&query)?;
                 let toon = render_health_page(&page, &query);
                 let usage = Self::telemetry_enabled()
-                    .then(|| self.estimated_source_tokens_cached(&state, store, &stamp, None, None))
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::directory_walk(
-                            MCP_EVENT_ATLAS_HEALTH,
-                            None,
-                            None,
-                            baseline_tokens,
-                        )
-                    });
+                    .then(|| McpUsageIntent::output(MCP_EVENT_ATLAS_HEALTH, None, None));
                 Ok((toon, usage))
             })
         })())
@@ -10006,20 +9790,11 @@ impl ProjectAtlasMcpServer {
                 .as_deref()
                 .unwrap_or(MCP_PURPOSE_TASK_QUEUE)
                 .to_string();
-            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, stamp| {
+            self.with_fresh_string_and_usage_for_request(&state, Some(context), |store, _stamp| {
                 let page = purpose_curation_page(store, &query, &task)?;
                 let toon = render_purpose_curation_page(&page);
                 let usage = Self::telemetry_enabled()
-                    .then(|| self.estimated_source_tokens_cached(&state, store, &stamp, None, None))
-                    .and_then(Result::ok)
-                    .map(|baseline_tokens| {
-                        McpUsageIntent::directory_walk(
-                            MCP_EVENT_ATLAS_PURPOSE_QUEUE,
-                            None,
-                            None,
-                            baseline_tokens,
-                        )
-                    });
+                    .then(|| McpUsageIntent::output(MCP_EVENT_ATLAS_PURPOSE_QUEUE, None, None));
                 Ok((toon, usage))
             })
         })())
@@ -10646,16 +10421,12 @@ mod tests {
         let server =
             ProjectAtlasMcpServer::new(state.db_path, None, "worktree-capacity".to_string(), false);
         let common = temp.path().join("common.git");
-        let event = usage_from_estimates_with_context(
+        let event = usage_from_output(
             "worktree-capacity",
             "atlas_overview",
             None,
             None,
-            100,
-            10,
-            TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_CONFIDENCE_INFERRED,
+            "overview",
         );
         for index in 0..=MCP_TELEMETRY_PROJECT_BINDING_LIMIT {
             let registration = control.register_worktree(
@@ -10709,7 +10480,7 @@ mod tests {
     }
 
     #[test]
-    fn routed_worktree_telemetry_preserves_session_baseline_identity()
+    fn routed_worktree_legacy_telemetry_is_counted_but_excluded_from_sizes()
     -> Result<(), Box<dyn std::error::Error>> {
         if telemetry_disabled() {
             return Ok(());
@@ -10719,16 +10490,13 @@ mod tests {
         let server =
             ProjectAtlasMcpServer::new(state.db_path, None, "worktree-scale".to_string(), false);
         let common = temp.path().join("common.git");
-        let event = usage_from_estimates_with_context(
+        let event = projectatlas_core::telemetry::usage_from_estimates(
             "worktree-scale",
             "atlas_overview",
             None,
             None,
             100,
             10,
-            TOKEN_BUCKET_NAVIGATION_AVOIDANCE,
-            TOKEN_BASELINE_SELECTED_CANDIDATES,
-            TOKEN_CONFIDENCE_INFERRED,
         );
         let registration = control.register_worktree(
             &WorktreeAlias::parse("worktree-001")?,
@@ -10758,15 +10526,14 @@ mod tests {
 
         require(
             overview.calls == 2,
-            "alias-routed modeled usage did not retain both accepted calls",
+            "alias-routed legacy usage did not retain both accepted calls",
         )?;
         require(
-            overview.deduped_modeled_tokens_avoided == 80,
-            "alias-routed modeled usage did not reuse the session baseline witness",
-        )?;
-        require(
-            overview.repeated_baselines_deduped == 1,
-            "alias-routed modeled usage did not classify the repeated baseline",
+            overview.excluded_unmeasured_calls == 2
+                && overview.output_bytes == 0
+                && overview.saved_bytes == 0
+                && overview.buckets.is_empty(),
+            "alias-routed legacy modeled usage leaked into reported sizes",
         )?;
         require(
             control.telemetry_retention_state()?.active_instance_rows == 1,
@@ -10856,14 +10623,13 @@ mod tests {
             false,
         );
         server.record_usage_for_state(&state, &store, |usage_instance| {
-            record_usage_estimate(
+            record_usage_output(
                 &store,
                 Some(usage_instance),
                 "seal-failure-test",
                 MCP_EVENT_ATLAS_OVERVIEW,
                 None,
                 None,
-                8,
                 "overview:\n  files: 1\n",
             )
         });
@@ -10914,14 +10680,13 @@ mod tests {
         };
         let server = ProjectAtlasMcpServer::new(db_path, None, "shared-label".to_string(), false);
         server.record_usage_for_state(&state, &store, |usage_instance| {
-            record_usage_estimate(
+            record_usage_output(
                 &store,
                 Some(usage_instance),
                 "rotation-test",
                 MCP_EVENT_ATLAS_OVERVIEW,
                 None,
                 None,
-                8,
                 "overview:\n  files: 1\n",
             )
         });
@@ -11228,12 +10993,7 @@ mod tests {
                 }
                 Ok((
                     hash,
-                    Some(McpUsageIntent::estimate(
-                        MCP_EVENT_ATLAS_OVERVIEW,
-                        None,
-                        None,
-                        1,
-                    )),
+                    Some(McpUsageIntent::output(MCP_EVENT_ATLAS_OVERVIEW, None, None)),
                 ))
             })?;
 
@@ -13212,12 +12972,7 @@ mod tests {
             |_store, _stamp| {
                 Ok((
                     "accepted result".to_string(),
-                    Some(McpUsageIntent::estimate(
-                        MCP_EVENT_ATLAS_OVERVIEW,
-                        None,
-                        None,
-                        1,
-                    )),
+                    Some(McpUsageIntent::output(MCP_EVENT_ATLAS_OVERVIEW, None, None)),
                 ))
             },
         )?;

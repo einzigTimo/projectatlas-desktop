@@ -146,29 +146,29 @@ window.PAD.overview = (function () {
       calibrationLine.appendChild(tokenizer);
       calibrationLine.appendChild(document.createTextNode(" (" + data.calibration.provider + " / " + data.calibration.model + ")"));
     } else {
-      calibrationLine.textContent = "Keine lokale Tokenizer-Kalibrierung hinterlegt — die Zahlen sind geschätzt.";
+      calibrationLine.textContent = "Keine lokale Tokenizer-Kalibrierung hinterlegt — alle Werte sind exakt gemessene Bytes.";
     }
     host.appendChild(calibrationLine);
 
     const methodLine = document.createElement("div");
-    methodLine.appendChild(document.createTextNode("Schätzart: "));
+    methodLine.appendChild(document.createTextNode("Messart: "));
     const kind = document.createElement("b");
     kind.textContent = data.estimateKind;
     methodLine.appendChild(kind);
-    methodLine.appendChild(document.createTextNode(" · Schätzer: "));
+    methodLine.appendChild(document.createTextNode(" · Einheit: "));
     const estimator = document.createElement("b");
     estimator.textContent = data.estimator;
     methodLine.appendChild(estimator);
     host.appendChild(methodLine);
 
     const scopeLine = document.createElement("div");
-    scopeLine.appendChild(document.createTextNode("Geltungsbereich: "));
+    scopeLine.appendChild(document.createTextNode("Messgrenze: "));
     const scope = document.createElement("b");
     scope.textContent = data.estimateScope;
     scopeLine.appendChild(scope);
-    scopeLine.appendChild(document.createTextNode(" · Vermeidungs-Konfidenz: "));
+    scopeLine.appendChild(document.createTextNode(" · Ersparnisbasis: "));
     const confidence = document.createElement("b");
-    confidence.textContent = data.readAvoidanceConfidence;
+    confidence.textContent = data.readAvoidanceScope;
     scopeLine.appendChild(confidence);
     host.appendChild(scopeLine);
   }
@@ -196,10 +196,10 @@ window.PAD.overview = (function () {
       head.textContent = "MCP-Server registriert, aber noch unbenutzt.";
       body =
         " Der Agent hat bisher keine atlas_*-Tools aufgerufen. " +
-        "Tipp: in der CLAUDE.md des Projekts vorgeben, zur Orientierung zuerst " +
-        "atlas_*-Tools zu nutzen, bevor Dateien gelesen werden.";
+        "Tipp: atlas_*-Tools für unbekannte oder große Dateien nutzen; " +
+        "für kurze Namens- oder Verwendungsfragen ist Suche meist kleiner.";
     } else {
-      head.textContent = "MCP-Server nicht verbunden – Tokens werden nicht erfasst.";
+      head.textContent = "MCP-Server nicht verbunden – Aufrufe werden nicht erfasst.";
       body =
         " Im Projektordner projectatlas init ausführen (registriert den Server in " +
         ".mcp.json) und Claude Code neu starten.";
@@ -235,22 +235,7 @@ window.PAD.overview = (function () {
     setText("eqSaved", fmt.int(data.saved));
     setBar("eqSavedBar", Math.abs(data.saved), reference);
 
-    const secondReference = Math.max(
-      Math.abs(data.measuredTokensSaved),
-      Math.abs(data.dedupedModeledTokensAvoided),
-      Math.abs(data.maximumTokensAvoided),
-      1
-    );
-    setText("eqMeasured", fmt.int(data.measuredTokensSaved));
-    setBar("eqMeasuredBar", Math.abs(data.measuredTokensSaved), secondReference);
-    setText("eqModeled", fmt.int(data.dedupedModeledTokensAvoided));
-    setBar("eqModeledBar", Math.abs(data.dedupedModeledTokensAvoided), secondReference);
-    setText("eqMaximum", fmt.int(data.maximumTokensAvoided));
-    setBar("eqMaximumBar", Math.abs(data.maximumTokensAvoided), secondReference);
-
     setText("navReads", fmt.int(data.likelyFileReadsAvoided));
-    setText("navObserved", fmt.int(data.observedFileReadReplacements));
-    setText("navModeled", fmt.int(data.modeledFileReadsAvoided));
     setText("navRate", fmt.percent(data.savingsRate));
 
     renderSignal(data);
